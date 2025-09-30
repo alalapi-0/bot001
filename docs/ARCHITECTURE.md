@@ -5,67 +5,63 @@
 ## 整体组件
 
 ```
-┌──────────────────────┐
-│ Web 前端 (web/)      │
-│  • Canvas 火柴人      │
-│  • Web Speech 驱动    │
-│  • Lipsync Fallback  │
-└──────────┬──────────┘
-           │ mouth 值
-┌──────────▼──────────┐
-│ 口型控制器 (lipsync) │
-│  • 脉冲/衰减          │
-│  • Analyser/RMS      │
-│  • 时间轴播放        │
-└──────────┬──────────┘
-           │ mouthTimeline/音频
-┌──────────▼──────────┐
-│ Express 服务 (server)│
-│  • /chat 占位        │
-│  • /tts 占位         │
-│  • 未来对接 TTS/LLM  │
-└──────────┬──────────┘
-           │ 云服务
-┌──────────▼──────────┐
-│ 第三方 TTS/LLM       │
-└──────────────────────┘
+┌──────────────────────┐        ┌─────────────────────┐        ┌─────────────────────────┐
+│ Web 前端 (web/)      │        │ 微信小程序 (weapp)   │        │ 服务端 (server/)        │
+│ • BigMouthAvatar     │        │ • Canvas 火柴人      │        │ • Express + eSpeak NG   │
+│ • MouthSignal        │        │ • innerAudioContext  │        │ • /tts 生成音频+时间轴   │
+│ • 渲染模式切换       │        │ • 时间轴插值          │        │ • /audio 提供下载        │
+└────────────┬─────────┘        └────────────┬────────┘        └────────────┬────────────┘
+             │ mouthTimeline/音频                         │ mouthTimeline/音频          │ eSpeak CLI
+             └────────────────────────────────────────────┴─────────────────────────────┘
 ```
 
 ## 数据流
 
-1. 用户在网页端输入文本并触发朗读。
-2. 若浏览器支持 Web Speech，直接本地合成语音；`onboundary` 事件驱动 `MouthSignal.pulse`，mouth 值传递给 `avatar.js` 绘制。
-3. 若浏览器不支持或用户关闭 Web Speech，前端请求 `/tts`：
-   - 当前返回文本说明，`lipsync.js` 构造占位时间轴确保火柴人仍有动作；
-   - 未来返回 `audioUrl` 与 `mouthTimeline`，前端根据 timeline 驱动，同时播放音频。
-4. 服务端 `/chat` 预留与大模型交互的入口，可为前端文本输入提供上下文回复。
+1. 用户在网页端或小程序输入文本并请求合成。
+2. 前端调用 `/tts`，服务端执行：
+   - 调用 `espeak-ng` 生成 `tmp/<uuid>.wav` 与 `tmp/<uuid>.pho`；
+   - 解析 `.pho` 中的音素与时长，映射至 viseme，并以 80Hz 采样成 `mouthTimeline`；
+   - 返回 `{ audioUrl, mouthTimeline, provider }`。
+3. 前端根据响应执行优先级：
+   - 若 `mouthTimeline` 存在，创建音频播放器与 `MouthSignal.playTimeline`；
+   - 否则回退到 Web Speech（仅限浏览器）或音量包络分析；
+4. 动画层（BigMouthAvatar 或小程序 Canvas）根据 `mouth` 值绘制大嘴巴头，Sprite 模式则按 `visemeId` 切换贴图；
+5. 服务端周期性清理临时音频，`/chat` 仍保留占位实现以待后续接入 LLM。
+
+### 时序图
+
+```
+用户输入 → main.js → requestServerTts → Express /tts
+    → eSpeak CLI (--pho) → 解析 .pho → 生成 mouthTimeline
+    → 返回 JSON → 浏览器创建 Audio 元素/innerAudioContext → MouthSignal.playTimeline
+    → BigMouthAvatar/Canvas 绘制 → 用户看到嘴型同步
+```
 
 ## 兼容性矩阵
 
-| 浏览器 | Web Speech 支持 | Web Audio 支持 | 建议策略 |
+| 平台 | Web Speech 支持 | Web Audio/音频支持 | mouthTimeline 建议 |
 | --- | --- | --- | --- |
-| Chrome 桌面 | ✅ 完整支持 | ✅ | 首选 Web Speech，回退到音量包络。 |
-| Safari macOS | ⚠️ 需手动启用或存在音色限制 | ✅ | 尝试 Web Speech，不稳定时改用回退。 |
-| Firefox | ❌ 无语音合成功能 | ✅ | 默认走 `/tts` 回退策略。 |
-| Edge Chromium | ✅ | ✅ | 行为同 Chrome。 |
-| 移动端 WebView | ❌ | ⚠️ 可能受限 | 主要依赖 `/tts` 与 mouthTimeline。 |
+| Chrome 桌面 | ✅ | ✅ | 优先使用服务端时间轴，必要时回退 Web Speech。 |
+| Safari macOS | ⚠️（需手动授权） | ✅ | 同 Chrome，注意首次播放需用户交互。 |
+| Firefox | ❌ | ✅ | 始终请求 `/tts`，使用时间轴或音量包络。 |
+| Edge Chromium | ✅ | ✅ | 行为与 Chrome 一致。 |
+| 微信小程序 | ❌ | ✅（InnerAudioContext） | 必须依赖 `/tts` 返回的时间轴。 |
 
 > 备注：⚠️ 表示该功能存在可用性差异，需要在 UI 上做提示。
 
 ## 回退策略的精度与性能取舍
 
 - **Web Audio RMS**：实现简单、无需额外依赖，但仅能估计嘴巴开合程度，缺乏精细 viseme 区分。
-- **服务端 mouthTimeline**：可直接提供语素级控制，精度高，但需要服务端额外计算与网络传输。
+- **服务端 mouthTimeline**：提供语素级控制，精度高，可跨端复用；需注意临时文件清理与网络延迟。
 - **占位时间轴**：保证演示效果，即使无音频也有动画；正式上线后应只作为兜底方案。
 
 ## 小程序端扩展
 
-- **限制**：微信小程序不支持 Web Speech，也无法直接访问浏览器的 `SpeechSynthesis`。
-- **改造点**：
-  1. 服务端 `/tts` 必须返回 `audioUrl` 与 `mouthTimeline`；
-  2. 小程序端使用 `<canvas>` 或 `webgl` 渲染火柴人，消费时间轴驱动嘴巴；
-  3. 音频播放需使用小程序内置的 `InnerAudioContext`，根据 timeline 同步 mouth 值。
-- **目录规划**：未来在仓库根目录新增 `weapp-stickbot/`，提供画布组件、时间轴播放器与接口封装。
+- **现状**：`weapp-stickbot/` 已提供最小骨架，使用 `innerAudioContext` + Canvas 绘制大嘴巴头像。
+- **差异**：
+  1. 仅支持服务端时间轴，不再回退 Web Speech；
+  2. Sprite 模式依赖 `assets/mouth/v{n}.png`，缺失时回退 Vector；
+  3. 定时器默认 66ms，可根据设备性能调整。
 
 ## 数据形象渲染管线建议
 

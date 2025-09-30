@@ -1,34 +1,37 @@
 /**
  * @module avatar
- * @description 负责在 <canvas> 元素上绘制火柴人、驱动动画循环，并暴露口型与姿态控制接口。
- * 设计要点：
- * 1. 所有动画都在 requestAnimationFrame 循环中运行，避免阻塞主线程；
- * 2. 通过配置项调整眨眼周期、肢体摆动幅度等参数，便于后续调优；
- * 3. mouthValue 由 lipsync 模块提供，通过平滑滤波避免跳变。
+ * @description 绘制 stickbot 火柴人，头部采用“大嘴巴”造型，可在矢量与 Sprite 两种模式之间切换。
  */
 
 /**
- * @typedef {Object} StickbotConfig
- * @property {[number, number]} blinkIntervalRange 眨眼间隔范围（秒），将在此区间随机取值。
- * @property {number} blinkDuration 一次眨眼持续时间（秒），决定眼睛闭合的时间长度。
- * @property {number} limbSwingAmplitude 四肢摆动幅度（弧度），建议 0.1-0.4 之间。
- * @property {number} limbSwingSpeed 四肢摆动速度倍数，决定摆动快慢。
- * @property {number} mouthSmoothing 口型平滑系数，0-1 之间，数值越大越平滑但响应越慢。
+ * @typedef {Object} AvatarConfig
+ * @property {[number, number]} blinkIntervalRange - 眨眼间隔范围（秒）。
+ * @property {number} blinkDuration - 单次眨眼时长（秒）。
+ * @property {number} limbSwingAmplitude - 四肢摆动幅度（弧度）。
+ * @property {number} limbSwingSpeed - 四肢摆动速度倍数。
+ * @property {number} mouthSmoothing - mouth 数值平滑系数，0-1 越大越平滑。
+ * @property {string} spriteBasePath - Sprite 模式资源根路径，默认 `./assets/mouth`。
+ * @property {number} spriteMaxViseme - 预加载 Sprite 的最大口型编号。
  */
 
-/** @type {StickbotConfig} */
+/**
+ * 默认配置。
+ * @type {AvatarConfig}
+ */
 export const DEFAULT_CONFIG = {
-  blinkIntervalRange: [2.5, 5],
+  blinkIntervalRange: [2.4, 5.2],
   blinkDuration: 0.18,
   limbSwingAmplitude: 0.22,
-  limbSwingSpeed: 1.6,
-  mouthSmoothing: 0.18,
+  limbSwingSpeed: 1.5,
+  mouthSmoothing: 0.2,
+  spriteBasePath: './assets/mouth',
+  spriteMaxViseme: 12,
 };
 
 /**
- * 生成下一次眨眼时间戳。
- * @param {[number, number]} range - 眨眼间隔范围（秒）。
- * @returns {number} 下一次眨眼应触发的绝对时间（秒）。
+ * 随机生成下一次眨眼的时间戳。
+ * @param {[number, number]} range - 眨眼间隔范围。
+ * @returns {number} 下一次眨眼的绝对时间（秒）。
  */
 const randomBlinkTime = (range) => {
   const [min, max] = range;
@@ -38,33 +41,51 @@ const randomBlinkTime = (range) => {
 };
 
 /**
- * StickbotAvatar 负责维护动画状态与渲染。
+ * @typedef {'vector' | 'sprite'} RenderMode
  */
-export class StickbotAvatar {
+
+/**
+ * BigMouthAvatar 负责根据 mouth 值绘制火柴人，支持矢量与 Sprite 模式。
+ */
+export class BigMouthAvatar {
   /**
-   * @param {HTMLCanvasElement} canvas - 用于绘制的画布元素。
-   * @param {Partial<StickbotConfig>} [config] - 可选配置，用于覆盖默认值。
+   * @param {HTMLCanvasElement} canvas - 渲染目标画布。
+   * @param {Partial<AvatarConfig>} [config] - 覆盖默认配置。
    */
   constructor(canvas, config = {}) {
     /** @type {HTMLCanvasElement} */
     this.canvas = canvas;
     /** @type {CanvasRenderingContext2D} */
     this.ctx = canvas.getContext('2d');
-    /** @type {StickbotConfig} */
+    /** @type {AvatarConfig} */
     this.config = { ...DEFAULT_CONFIG, ...config };
 
     /** @type {number} */
-    this.currentMouth = 0; // 当前口型开合度，范围 0-1
+    this.currentMouth = 0.1;
     /** @type {number} */
-    this.targetMouth = 0; // lipsync 模块传入的目标值
+    this.targetMouth = 0.1;
     /** @type {number} */
-    this.lastTimestamp = 0; // 上一帧时间戳
+    this.currentViseme = 0;
+    /** @type {number} */
+    this.targetViseme = 0;
+    /** @type {string} */
+    this.currentPhoneme = 'idle';
+
     /** @type {number|null} */
-    this.rafId = null; // requestAnimationFrame 的 ID
+    this.rafId = null;
+    /** @type {number} */
+    this.lastTimestamp = 0;
     /** @type {number} */
     this.nextBlinkTime = randomBlinkTime(this.config.blinkIntervalRange);
     /** @type {number} */
-    this.blinkProgress = 0; // 0-1，0 为睁眼，1 为完全闭眼
+    this.blinkProgress = 0;
+
+    /** @type {RenderMode} */
+    this.renderMode = 'vector';
+    /** @type {HTMLImageElement[]} */
+    this.spriteFrames = [];
+    /** @type {boolean} */
+    this.spriteLoaded = false;
   }
 
   /**
@@ -91,35 +112,106 @@ export class StickbotAvatar {
   }
 
   /**
-   * 设置口型目标值。
-   * @param {number} value - 口型开合度，范围 0（闭口）到 1（大幅张口）。
+   * 更新目标 mouth 帧。
+   * @param {{ value: number, visemeId: number, phoneme?: string }} frame - mouth 帧数据。
    */
-  setMouthValue(value) {
-    this.targetMouth = Math.min(1, Math.max(0, value));
+  setMouthFrame(frame) {
+    this.targetMouth = Math.min(1, Math.max(0, frame.value));
+    this.targetViseme = frame.visemeId ?? 0;
+    this.currentPhoneme = frame.phoneme || 'unknown';
   }
 
   /**
-   * 帧更新逻辑：处理口型平滑、肢体摆动节奏与眨眼。
-   * @param {number} timestamp - 当前帧的时间戳（毫秒）。
+   * 手动切换渲染模式。当 Sprite 模式未成功加载资源时自动回退。
+   * @param {RenderMode} mode - 目标渲染模式。
+   * @returns {Promise<boolean>} 是否切换成功。
+   */
+  async setRenderMode(mode) {
+    if (mode === 'sprite') {
+      const ok = await this.ensureSprites();
+      if (!ok) {
+        this.renderMode = 'vector';
+        return false;
+      }
+    }
+    this.renderMode = mode;
+    return true;
+  }
+
+  /**
+   * 自定义 Sprite 资源目录。
+   * @param {{ basePath?: string, maxViseme?: number }} options - Sprite 配置。
+   */
+  configureSprite(options) {
+    if (options.basePath) {
+      this.config.spriteBasePath = options.basePath;
+      this.spriteLoaded = false;
+      this.spriteFrames = [];
+    }
+    if (options.maxViseme) {
+      this.config.spriteMaxViseme = options.maxViseme;
+      this.spriteLoaded = false;
+      this.spriteFrames = [];
+    }
+  }
+
+  /**
+   * 确保 Sprite 资源已加载。若目录为空将返回 false。
+   * @returns {Promise<boolean>} 是否存在可用 Sprite。
+   */
+  async ensureSprites() {
+    if (this.spriteLoaded) {
+      return this.spriteFrames.length > 0;
+    }
+    this.spriteFrames = [];
+    for (let i = 0; i <= this.config.spriteMaxViseme; i += 1) {
+      // eslint-disable-next-line no-await-in-loop -- 顺序加载便于提前中断
+      const image = await this.loadSpriteImage(`${this.config.spriteBasePath}/v${i}.png`);
+      if (image) {
+        this.spriteFrames[i] = image;
+      } else if (i === 0) {
+        break;
+      }
+    }
+    this.spriteLoaded = true;
+    return this.spriteFrames.length > 0;
+  }
+
+  /**
+   * 加载单张 Sprite。若资源不存在会返回 null。
+   * @param {string} url - 图片路径。
+   * @returns {Promise<HTMLImageElement|null>} 加载结果。
+   */
+  loadSpriteImage(url) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = url;
+    });
+  }
+
+  /**
+   * 动画更新：mouth 平滑、眨眼节奏与肢体摇摆。
+   * @param {number} timestamp - RAF 时间戳（毫秒）。
    */
   update(timestamp) {
     if (!this.lastTimestamp) {
       this.lastTimestamp = timestamp;
     }
-    const delta = (timestamp - this.lastTimestamp) / 1000; // 换算为秒
+    const delta = (timestamp - this.lastTimestamp) / 1000;
     this.lastTimestamp = timestamp;
 
-    // 采用指数平滑避免口型闪烁
     const smoothing = this.config.mouthSmoothing;
-    this.currentMouth = this.currentMouth + (this.targetMouth - this.currentMouth) * (1 - Math.pow(1 - smoothing, delta * 60));
+    const blendFactor = 1 - Math.pow(1 - smoothing, delta * 60);
+    this.currentMouth += (this.targetMouth - this.currentMouth) * blendFactor;
+    this.currentViseme += (this.targetViseme - this.currentViseme) * blendFactor;
 
-    // 眨眼进度更新：当到达下一次眨眼时间时，启动一个短暂的闭眼动画
     const now = timestamp / 1000;
     if (now >= this.nextBlinkTime) {
       this.blinkProgress = Math.min(1, this.blinkProgress + delta / (this.config.blinkDuration / 2));
       if (this.blinkProgress >= 1) {
-        // 完成闭眼后，立即开始睁眼过程
-        this.nextBlinkTime = now + 0.1; // 0.1 秒后开始睁眼
+        this.nextBlinkTime = now + 0.12;
       }
     } else if (this.blinkProgress > 0) {
       this.blinkProgress = Math.max(0, this.blinkProgress - delta / (this.config.blinkDuration / 2));
@@ -130,7 +222,7 @@ export class StickbotAvatar {
   }
 
   /**
-   * 绘制火柴人及动态部位。
+   * 根据当前渲染模式绘制画面。
    */
   draw() {
     const ctx = this.ctx;
@@ -139,20 +231,32 @@ export class StickbotAvatar {
     const { width, height } = this.canvas;
     ctx.clearRect(0, 0, width, height);
 
-    // 计算身体中心
-    const centerX = width / 2;
-    const centerY = height / 2;
+    ctx.save();
+    ctx.translate(width / 2, height / 2 + 40);
+    ctx.lineCap = 'round';
 
-    // 肢体摆动使用正弦函数，mouth 值叠加轻微抖动让角色更生动
+    this.drawBody(ctx);
+
+    if (this.renderMode === 'sprite' && this.spriteFrames.length > 0) {
+      this.drawSpriteHead(ctx);
+    } else {
+      this.drawVectorHead(ctx);
+    }
+
+    ctx.restore();
+  }
+
+  /**
+   * 绘制火柴人身体部分。
+   * @param {CanvasRenderingContext2D} ctx - 画布上下文。
+   */
+  drawBody(ctx) {
     const time = performance.now() / 1000;
     const swing = Math.sin(time * this.config.limbSwingSpeed) * this.config.limbSwingAmplitude;
-    const jitter = (Math.random() - 0.5) * 0.05 * (0.2 + this.currentMouth);
+    const jitter = (Math.random() - 0.5) * 0.06 * (0.2 + this.currentMouth);
 
-    ctx.save();
-    ctx.translate(centerX, centerY + 40);
     ctx.strokeStyle = '#1f2937';
     ctx.lineWidth = 6;
-    ctx.lineCap = 'round';
 
     // 躯干
     ctx.beginPath();
@@ -160,38 +264,12 @@ export class StickbotAvatar {
     ctx.lineTo(0, 40);
     ctx.stroke();
 
-    // 头部（根据 mouth 值轻微上下浮动）
-    const headOffset = -140 - this.currentMouth * 6;
-    ctx.beginPath();
-    ctx.arc(0, headOffset, 32 + this.currentMouth * 2, 0, Math.PI * 2);
-    ctx.stroke();
-
-    // 眼睛：根据 blinkProgress 调整高度实现闭合效果
-    const eyeY = headOffset - 6;
-    const eyeGap = 16;
-    const eyeOpenHeight = Math.max(2, 8 * (1 - this.blinkProgress));
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(-eyeGap, eyeY);
-    ctx.lineTo(-eyeGap, eyeY + eyeOpenHeight);
-    ctx.moveTo(eyeGap, eyeY);
-    ctx.lineTo(eyeGap, eyeY + eyeOpenHeight);
-    ctx.stroke();
-
-    // 嘴巴：使用椭圆表示，根据 currentMouth 调整高度与宽度
-    const mouthWidth = 28 + this.currentMouth * 20;
-    const mouthHeight = 6 + this.currentMouth * 22;
-    ctx.beginPath();
-    ctx.ellipse(0, headOffset + 16, mouthWidth, mouthHeight, 0, 0, Math.PI * 2);
-    ctx.stroke();
-
     // 手臂
-    ctx.lineWidth = 6;
     ctx.beginPath();
     ctx.moveTo(0, -80);
-    ctx.lineTo(-70, -80 + Math.sin(time * this.config.limbSwingSpeed + Math.PI / 4) * 30);
+    ctx.lineTo(-70, -80 + Math.sin(time * this.config.limbSwingSpeed + Math.PI / 4) * 32);
     ctx.moveTo(0, -80);
-    ctx.lineTo(70, -80 + Math.sin(time * this.config.limbSwingSpeed + Math.PI + jitter) * 30);
+    ctx.lineTo(70, -80 + Math.sin(time * this.config.limbSwingSpeed + Math.PI + jitter) * 32);
     ctx.stroke();
 
     // 腿部
@@ -201,7 +279,111 @@ export class StickbotAvatar {
     ctx.moveTo(0, 40);
     ctx.lineTo(50, 140 - swing * 40);
     ctx.stroke();
+  }
+
+  /**
+   * 绘制矢量大嘴巴头部。
+   * @param {CanvasRenderingContext2D} ctx - 画布上下文。
+   */
+  drawVectorHead(ctx) {
+    ctx.save();
+    const headY = -150 - this.currentMouth * 8;
+    const headRadius = 48;
+    const mouthWidthBase = 70;
+    const mouthHeight = 8 + this.currentMouth * 48;
+    const visemeRounded = Math.round(this.currentViseme);
+    const roundedLip = visemeRounded === 9;
+    const widthFactor = roundedLip ? 0.65 : 1;
+
+    // 头部轮廓
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = '#111827';
+    ctx.fillStyle = '#f9fafb';
+    ctx.beginPath();
+    ctx.arc(0, headY, headRadius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // 眼睛
+    const eyeGap = 20;
+    const eyeHeight = Math.max(2, 10 * (1 - this.blinkProgress));
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(-eyeGap, headY - 12);
+    ctx.lineTo(-eyeGap, headY - 12 + eyeHeight);
+    ctx.moveTo(eyeGap, headY - 12);
+    ctx.lineTo(eyeGap, headY - 12 + eyeHeight);
+    ctx.stroke();
+
+    // 嘴唇：上唇和下唇使用贝塞尔曲线
+    const mouthWidth = mouthWidthBase * widthFactor;
+    const lipTopY = headY + 18;
+    const lipBottomY = lipTopY + mouthHeight;
+    const controlOffset = mouthHeight * 0.7;
+
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = '#ef4444';
+
+    ctx.beginPath();
+    ctx.moveTo(-mouthWidth, lipTopY);
+    ctx.bezierCurveTo(-mouthWidth * 0.4, lipTopY - controlOffset, mouthWidth * 0.4, lipTopY - controlOffset, mouthWidth, lipTopY);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(-mouthWidth, lipBottomY);
+    ctx.bezierCurveTo(-mouthWidth * 0.4, lipBottomY + controlOffset, mouthWidth * 0.4, lipBottomY + controlOffset, mouthWidth, lipBottomY);
+    ctx.stroke();
+
+    // 口腔填充
+    ctx.fillStyle = '#7f1d1d';
+    ctx.beginPath();
+    ctx.moveTo(-mouthWidth + 3, lipTopY + 3);
+    ctx.bezierCurveTo(-mouthWidth * 0.3, lipTopY + 3 - controlOffset * 0.8, mouthWidth * 0.3, lipTopY + 3 - controlOffset * 0.8, mouthWidth - 3, lipTopY + 3);
+    ctx.lineTo(mouthWidth - 3, lipBottomY - 3);
+    ctx.bezierCurveTo(mouthWidth * 0.3, lipBottomY - 3 + controlOffset * 0.8, -mouthWidth * 0.3, lipBottomY - 3 + controlOffset * 0.8, -mouthWidth + 3, lipBottomY - 3);
+    ctx.closePath();
+    ctx.fill();
+
+    // 牙齿
+    if (mouthHeight > 12) {
+      ctx.fillStyle = '#fefce8';
+      const toothCount = Math.min(6, Math.max(3, Math.floor(mouthWidth / 14)));
+      const toothWidth = (mouthWidth * 1.8) / toothCount / 2;
+      const toothHeight = Math.min(12, mouthHeight * 0.4);
+      for (let i = 0; i < toothCount; i += 1) {
+        const ratio = (i / (toothCount - 1)) * 2 - 1;
+        const x = ratio * mouthWidth * 0.7;
+        ctx.fillRect(x - toothWidth / 2, lipTopY + 2, toothWidth, toothHeight);
+      }
+    }
+
+    // 圆唇时增加高光
+    if (roundedLip) {
+      ctx.strokeStyle = '#fca5a5';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(0, (lipTopY + lipBottomY) / 2, mouthWidth * 0.7, mouthHeight * 0.4, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
 
     ctx.restore();
   }
+
+  /**
+   * 绘制 Sprite 头部，按 visemeId 选择贴图。
+   * @param {CanvasRenderingContext2D} ctx - 画布上下文。
+   */
+  drawSpriteHead(ctx) {
+    const headY = -180;
+    const image = this.spriteFrames[Math.round(this.currentViseme)] || this.spriteFrames[0];
+    if (!image) {
+      this.drawVectorHead(ctx);
+      return;
+    }
+    const scale = 1 + this.currentMouth * 0.1;
+    const width = image.width * scale;
+    const height = image.height * scale;
+    ctx.drawImage(image, -width / 2, headY - height / 2, width, height);
+  }
 }
+

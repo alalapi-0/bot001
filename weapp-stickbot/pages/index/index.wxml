@@ -1,0 +1,24 @@
+<view class="container">
+  <canvas type="2d" canvas-id="avatar" style="width: 320px; height: 420px; background: #ffffff; border-radius: 16px;"></canvas>
+  <view class="panel">
+    <textarea class="text-input" value="{{text}}" placeholder="请输入要朗读的文本" bindinput="onTextInput"></textarea>
+    <view class="selector">
+      <text class="label">TTS 供应器</text>
+      <picker mode="selector" range="{{providers}}" value="{{providerIndex}}" bindchange="onProviderChange">
+        <view class="picker-value">{{providers[providerIndex]}}</view>
+      </picker>
+    </view>
+    <view class="selector">
+      <text class="label">渲染模式</text>
+      <picker mode="selector" range="{{renderModes}}" value="{{renderModeIndex}}" bindchange="onRenderModeChange">
+        <view class="picker-value">{{renderModes[renderModeIndex]}}</view>
+      </picker>
+    </view>
+    <view class="info">当前 mouth：{{mouthDisplay}}，viseme：{{visemeId}}</view>
+    <view class="button-group">
+      <button type="primary" bindtap="onSynthesize">开始合成</button>
+      <button type="default" bindtap="onStop">停止</button>
+    </view>
+    <view class="hint">服务端需在可信域名下运行，Sprite 贴图放入 <text selectable="true">/assets/mouth/v0.png</text> 等文件。</view>
+  </view>
+</view>

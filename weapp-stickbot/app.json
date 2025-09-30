@@ -1,0 +1,10 @@
+{
+  "pages": [
+    "pages/index/index"
+  ],
+  "window": {
+    "navigationBarTitleText": "stickbot 大嘴巴头",
+    "navigationBarBackgroundColor": "#f3f4f6",
+    "backgroundColor": "#f3f4f6"
+  }
+}
