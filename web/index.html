@@ -86,6 +86,12 @@
         gap: 4px;
       }
 
+      .selector-group {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
       .progress-container {
         display: flex;
         flex-direction: column;
@@ -112,9 +118,24 @@
       <section class="controls">
         <h1 style="margin: 0">stickbot 控制面板</h1>
         <textarea id="speech-text" placeholder="请输入要朗读的文本">你好，我是 stickbot。今天我们一起练习口型同步！</textarea>
+        <div class="selector-group">
+          <label for="tts-provider">TTS 供应器</label>
+          <select id="tts-provider">
+            <option value="espeak">eSpeak NG（本地命令行）</option>
+            <option value="azure">Azure（需手动配置）</option>
+          </select>
+          <small id="provider-hint" style="color: #6b7280">服务端会优先尝试返回 mouth 时间轴。</small>
+        </div>
+        <div class="selector-group">
+          <label for="render-mode">渲染模式</label>
+          <select id="render-mode">
+            <option value="vector">Vector（默认）</option>
+            <option value="sprite">Sprite（需手动放置贴图）</option>
+          </select>
+        </div>
         <label>
           <input type="checkbox" id="use-webspeech" checked />
-          使用浏览器 Web Speech API
+          无时间轴时尝试使用浏览器 Web Speech API
         </label>
         <div class="slider-group">
           <span>语速：<span id="rate-display">1.0</span></span>
@@ -125,7 +146,7 @@
           <input type="range" id="pitch-slider" min="0" max="2" step="0.1" value="1" />
         </div>
         <div class="progress-container">
-          <span>口型幅度</span>
+          <span>口型幅度 <span id="viseme-display" style="font-size: 12px; color: #6b7280"></span></span>
           <progress id="mouth-progress" value="0" max="1"></progress>
         </div>
         <div style="display: flex; gap: 12px">
@@ -133,7 +154,8 @@
           <button class="secondary" id="stop-btn">停止</button>
         </div>
         <p style="font-size: 13px; color: #4b5563; margin: 0">
-          提示：若浏览器不支持 Web Speech，取消勾选后将调用服务端 `/tts` 占位接口，并使用音量包络回退策略。
+          优先级：服务端时间轴 &gt; Web Speech 边界事件 &gt; 音量包络回退。Sprite 模式需要在 <code>web/assets/mouth</code>
+          目录放入 v0.png~vN.png。
         </p>
       </section>
     </main>

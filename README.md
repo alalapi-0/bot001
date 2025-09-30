@@ -1,10 +1,11 @@
 # stickbot
 
-stickbot 是一个最小但可运行、易扩展的火柴人语音 Bot 项目骨架，目标是：
+stickbot 是一个最小但可运行、易扩展的火柴人语音 Bot 项目骨架，第二轮更新完成后具备以下能力：
 
-1. 在网页端通过 `<canvas>` 绘制火柴人并驱动基础口型同步；
-2. 服务端提供占位的聊天与语音合成接口，便于后续接入真实 AI 能力；
-3. 未来扩展到微信小程序与可复用组件形式。
+1. 服务端接入开源 eSpeak NG，返回真实音频与 80Hz 口型时间轴；
+2. 网页端使用“大嘴巴头”形象，支持 Vector/Sprite 渲染与 TTS 供应器切换；
+3. 微信小程序骨架可消费相同时间轴，实现跨端嘴型同步；
+4. 聊天接口仍保留占位，实现后续与 LLM 的集成空间。
 
 ## 快速开始
 
@@ -13,7 +14,7 @@ stickbot 是一个最小但可运行、易扩展的火柴人语音 Bot 项目骨
 git clone <repo-url> stickbot
 cd stickbot
 
-# 安装依赖（提供 http-server 与 npm-run-all）
+# 安装依赖（包含 http-server、npm-run-all、dotenv 等）
 npm install
 ```
 
@@ -23,7 +24,7 @@ npm install
 npm run dev:web
 ```
 
-访问 <http://localhost:5173>，即可看到火柴人画布与控制面板。
+访问 <http://localhost:5173>，即可看到火柴人画布、渲染模式切换与 TTS 供应器选择。
 
 ### 运行服务端占位接口
 
@@ -31,7 +32,7 @@ npm run dev:web
 npm run dev:server
 ```
 
-默认监听 `STICKBOT_SERVER_PORT`（`.env.example` 中为 8787）。开启后网页端的回退 TTS fetch 会请求 `http://localhost:8787/tts`。
+默认监听 `STICKBOT_SERVER_PORT`（`.env.example` 中为 8787），并在 `tmp/` 目录生成临时音频。可运行 `npm run clean:tmp` 清理缓存。
 
 ### 同时运行前后端
 
@@ -45,22 +46,22 @@ npm run dev
 
 ## 演示流程
 
-1. 打开支持 Web Speech API 的浏览器（Chrome 桌面版推荐）。
-2. 在右侧文本框输入要朗读的内容，保持“使用浏览器 Web Speech”复选框勾选。
-3. 点击“朗读并演示”，浏览器会使用 `SpeechSynthesis` 发声，同时通过 `onboundary` 事件触发口型开合，火柴人肢体会缓慢摆动，眼睛会随机眨动。
-4. 如果浏览器不支持 Web Speech 或想测试回退策略，请取消勾选。“朗读并演示”会改为调用服务端 `/tts` 接口；当前仅返回一段说明文本，并用简单包络生成器模拟口型（不会尝试下载二进制文件）。
-5. 可用滑条调整语速与音调，观察口型幅度进度条实时变化。
+1. 打开支持 Web Audio 的现代浏览器（Chrome 桌面版推荐）。
+2. 在文本框输入待合成内容，选择 TTS 供应器（默认 eSpeak）与渲染模式（Vector/Sprite）。
+3. 点击“朗读并演示”：
+   - 若服务端返回 `mouthTimeline`，网页会下载音频并严格按照时间轴驱动嘴型；
+   - 否则将回退至 Web Speech 或音量包络分析，并在控制台提示当前策略；
+4. 渲染模式可随时切换，Sprite 模式需在 `web/assets/mouth/` 下放置 `v0.png` 等贴图；
+5. 滑条仍可调整语速、音调，mouth 进度条会实时展示当前张合度与 viseme。
 
 ## 架构概览
 
 ```
-+-------------+      +----------------+      +----------------+      +-----------------+
-| 文本输入框  | ---> | main.js 业务层 | ---> | lipsync.js 口型信号 | ---> | avatar.js 画布渲染 |
-+-------------+      +----------------+      +----------------+      +-----------------+
-        |                          |                     |                     |
-        |                          |                     |                     |
-        v                          v                     v                     v
-  SpeechSynthesis API       /tts 占位接口       mouthTimeline/音量包络      <canvas> 火柴人动画
+文本输入 → main.js（请求 /tts、选择策略） → lipsync.js（时间轴插值 + MouthSignal）
+    ↘                                           ↘
+     Web Speech 脉冲                      innerAudio / AudioContext
+                                             ↘
+                                        BigMouthAvatar 渲染
 ```
 
 ## 部署建议
@@ -76,10 +77,19 @@ npm run dev
 
 ## 路线图
 
-1. 服务端接入真实 TTS，返回 audioUrl 与 mouthTimeline。
-2. 网页端优先消费 mouthTimeline，再退回 Web Speech 与音量包络。
-3. 新建 `/weapp-stickbot` 目录，提供小程序最小可运行画布火柴人与时间轴消费器的骨架。
-4. 将前端封装成可复用的 Web Component（`<stick-bot>`）与小程序自定义组件。
+**已完成**
+
+1. eSpeak NG 开源 TTS 接入与口型时间轴。
+2. 网页端“大嘴巴头”与 Vector/Sprite 渲染切换。
+3. 微信小程序骨架接入口型时间轴。
+
+**下一步**
+
+1. 可插拔多语种映射表与 viseme 配置管理。
+2. Sprite 资源打点与可视化校准工具。
+3. 将嘴型与头部摇摆、表情能量耦合。
+4. 对齐云存储/CDN 与缓存策略。
+5. 封装成 SSR + WebComponent 形态，统一多端体验。
 
 ## 贡献
 

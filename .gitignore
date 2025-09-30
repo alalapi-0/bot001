@@ -11,7 +11,12 @@ yarn-error.log*
 .pnpm-debug.log*
 .DS_Store
 .tmp/
+tmp/
 coverage/
+
+# WeChat mini program build cache
+weapp-stickbot/miniprogram/
+weapp-stickbot/dist/
 
 # Editor directories and files
 .idea/

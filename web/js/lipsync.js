@@ -1,47 +1,89 @@
 /**
  * @module lipsync
- * @description 提供口型信号控制器，支持 Web Speech 边界事件脉冲、Web Audio 分析与文本占位包络三种方式。
- * 核心职责：
- * 1. 统一 mouth 值的发布，供 avatar.js 订阅；
- * 2. 在没有音频时提供可预期的衰减动画，避免角色僵硬；
- * 3. 为未来接入 mouthTimeline 留好扩展点，只需调用 playEnvelope 即可。
+ * @description 提供口型信号控制、时间轴插值以及多种驱动策略的封装。
+ *              第二轮中优先使用服务端返回的 mouthTimeline，仍保留 Web Speech 与音量包络作为兜底。
+ */
+
+/**
+ * @typedef {Object} MouthFrame
+ * @property {number} value - mouth 数值，范围 [0,1]。
+ * @property {number} visemeId - 当前口型编号。
+ * @property {string} phoneme - 来源音素或事件标识。
+ */
+
+/**
+ * @typedef {Object} TimelinePoint
+ * @property {number} t - 时间（秒）。
+ * @property {number} v - mouth 值。
+ * @property {number} visemeId - 口型编号。
+ * @property {string} [phoneme] - 可选音素标签。
  */
 
 /**
  * @typedef {Object} PulseOptions
- * @property {number} [strength] 脉冲幅度，范围 0-1，缺省为 0.8。
+ * @property {number} [strength] - 口型脉冲强度，默认 0.8。
+ * @property {number} [visemeId] - 可选口型编号。
+ * @property {string} [phoneme] - 自定义音素标签。
  */
 
 /**
- * @typedef {Object} EnvelopePoint
- * @property {number} t - 时间（秒）。
- * @property {number} v - mouth 值（0-1）。
- */
-
-/**
- * 口型控制器配置，可根据喜好调整。
- * @type {{decay: number, minValue: number}}
+ * 口型控制器基础配置。
  */
 const SIGNAL_CONFIG = {
-  decay: 0.92, // 每帧衰减系数，越小衰减越快
-  minValue: 0.02, // 避免完全归零导致画面僵硬
+  decay: 0.9, // 逐帧衰减系数
+  minValue: 0.04, // 避免完全闭嘴造成角色僵硬
+};
+
+/**
+ * 计算服务端基础地址。默认指向与前端同主机的 8787 端口，亦可通过 window.STICKBOT_SERVER_ORIGIN 覆盖。
+ * @returns {string} 服务端基础地址。
+ */
+const detectServerOrigin = () => {
+  if (typeof window === 'undefined') {
+    return 'http://localhost:8787';
+  }
+  if (window.STICKBOT_SERVER_ORIGIN) {
+    return window.STICKBOT_SERVER_ORIGIN;
+  }
+  const protocol = window.location?.protocol || 'http:';
+  const hostname = window.location?.hostname || 'localhost';
+  const configuredPort = window.STICKBOT_SERVER_PORT || '8787';
+  if (window.location?.port && window.location.port === String(configuredPort)) {
+    return `${protocol}//${hostname}${window.location.port ? `:${window.location.port}` : ''}`;
+  }
+  return `${protocol}//${hostname}:${configuredPort}`;
+};
+
+const SERVER_ORIGIN = detectServerOrigin();
+
+/**
+ * 将相对路径转换为服务端的绝对 URL。
+ * @param {string} path - 相对或绝对路径。
+ * @returns {string} 可用于 fetch 的地址。
+ */
+export const resolveServerUrl = (path) => {
+  if (!path) return SERVER_ORIGIN;
+  if (/^https?:/i.test(path)) {
+    return path;
+  }
+  return new URL(path, SERVER_ORIGIN).toString();
 };
 
 /**
  * @callback MouthSubscriber
- * @param {number} value - 当前 mouth 值。
+ * @param {MouthFrame} frame - mouth 帧数据。
  */
 
 /**
  * @class MouthSignal
- * @description 负责维护 mouth 值、应用衰减并通知订阅者。
+ * @description 负责维护 mouth 数值、连接各类驱动源并在 RAF 循环中做插值。
  */
 export class MouthSignal {
   constructor() {
     /** @type {Set<MouthSubscriber>} */
     this.subscribers = new Set();
-    /** @type {number} */
-    this.value = 0;
+    /** @type {MouthFrame} */
+    this.frame = { value: SIGNAL_CONFIG.minValue, visemeId: 0, phoneme: 'idle' };
     /** @type {number|null} */
     this.rafId = null;
     /** @type {number} */
@@ -50,42 +92,55 @@ export class MouthSignal {
     this.analyser = null;
     /** @type {Float32Array|null} */
     this.analyserBuffer = null;
-    /** @type {EnvelopePlayback|null} */
-    this.envelopePlayback = null;
+    /** @type {TimelinePlayback|null} */
+    this.timelinePlayback = null;
   }
 
   /**
-   * 订阅 mouth 更新。
+   * 订阅 mouth 帧。
    * @param {MouthSubscriber} fn - 回调函数。
    * @returns {() => void} 取消订阅方法。
    */
   subscribe(fn) {
     this.subscribers.add(fn);
-    fn(this.value);
+    fn(this.frame);
     return () => this.subscribers.delete(fn);
   }
 
   /**
-   * 设置当前 mouth 值并通知订阅者。
-   * @param {number} next - 新的 mouth 值，0-1。
+   * 直接设置 mouth 帧，常用于外部插值结果。
+   * @param {Partial<MouthFrame>} patch - 要更新的字段。
    */
-  setValue(next) {
-    const clamped = Math.min(1, Math.max(0, next));
-    this.value = Math.max(SIGNAL_CONFIG.minValue, clamped);
+  setFrame(patch) {
+    const value = patch.value ?? this.frame.value;
+    const visemeId = patch.visemeId ?? this.frame.visemeId;
+    const phoneme = patch.phoneme ?? this.frame.phoneme;
+    const clamped = Math.max(SIGNAL_CONFIG.minValue, Math.min(1, value));
+    this.frame = { value: clamped, visemeId, phoneme };
     this.emit();
   }
 
   /**
-   * 触发一次脉冲，常用于 onboundary 事件。
-   * @param {PulseOptions} [options]
+   * 兼容旧逻辑的数值设置。
+   * @param {number} value - mouth 值。
    */
-  pulse(options = {}) {
-    const strength = options.strength ?? 0.8;
-    this.setValue(Math.max(this.value, strength));
+  setValue(value) {
+    this.setFrame({ value });
   }
 
   /**
-   * 启动帧循环，实现自然衰减或监听音频分析结果。
+   * 触发一次脉冲，例如 Web Speech boundary 事件。
+   * @param {PulseOptions} [options] - 脉冲配置。
+   */
+  pulse(options = {}) {
+    const strength = options.strength ?? 0.8;
+    const visemeId = options.visemeId ?? 2;
+    const phoneme = options.phoneme ?? 'pulse';
+    this.setFrame({ value: Math.max(this.frame.value, strength), visemeId, phoneme });
+  }
+
+  /**
+   * 开始 RAF 循环。
    */
   start() {
     if (this.rafId !== null) return;
@@ -97,22 +152,23 @@ export class MouthSignal {
   }
 
   /**
-   * 停止帧循环并重置状态。
+   * 停止循环并重置状态。
    */
   stop() {
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
     }
+    this.lastTick = 0;
+    this.timelinePlayback = null;
     this.analyser = null;
     this.analyserBuffer = null;
-    this.envelopePlayback = null;
-    this.setValue(0);
+    this.setFrame({ value: SIGNAL_CONFIG.minValue, visemeId: 0, phoneme: 'idle' });
   }
 
   /**
-   * 每帧调用，用于衰减或读取 analyser 数据。
-   * @param {number} timestamp - 当前帧的毫秒时间戳。
+   * RAF tick：根据当前驱动源更新 mouth。
+   * @param {number} timestamp - RAF 时间戳（毫秒）。
    */
   tick(timestamp) {
     if (!this.lastTick) {
@@ -121,34 +177,37 @@ export class MouthSignal {
     const delta = (timestamp - this.lastTick) / (1000 / 60);
     this.lastTick = timestamp;
 
-    if (this.envelopePlayback) {
-      this.updateFromEnvelope(timestamp);
+    if (this.timelinePlayback) {
+      const done = this.timelinePlayback.update();
+      if (done) {
+        this.timelinePlayback = null;
+      }
       return;
     }
 
     if (this.analyser && this.analyserBuffer) {
       this.updateFromAnalyser();
-    } else {
-      // 无 analyser 时执行被动衰减，保持最小值
-      const decayed = this.value * Math.pow(SIGNAL_CONFIG.decay, delta);
-      this.value = Math.max(SIGNAL_CONFIG.minValue, decayed);
-      this.emit();
+      return;
     }
+
+    // 默认衰减
+    const decayed = this.frame.value * Math.pow(SIGNAL_CONFIG.decay, delta);
+    this.setFrame({ value: decayed, phoneme: 'decay' });
   }
 
   /**
-   * 连接 Web Audio 分析器，用于能量包络回退。
-   * @param {AnalyserNode} analyser - Web Audio 的 AnalyserNode。
+   * 绑定 Web Audio analyser，用于音量包络回退策略。
+   * @param {AnalyserNode} analyser - Web Audio 分析器。
    */
   attachAnalyser(analyser) {
     this.analyser = analyser;
     this.analyser.fftSize = 256;
-    this.analyser.smoothingTimeConstant = 0.5;
+    this.analyser.smoothingTimeConstant = 0.6;
     this.analyserBuffer = new Float32Array(this.analyser.fftSize);
   }
 
   /**
-   * 断开 analyser。
+   * 解除 analyser 绑定。
    */
   detachAnalyser() {
     this.analyser = null;
@@ -156,7 +215,7 @@ export class MouthSignal {
   }
 
   /**
-   * 从 analyser 中读取信号并映射到 mouth 值。
+   * 基于 analyser 数据计算 RMS 并映射到 mouth。
    */
   updateFromAnalyser() {
     if (!this.analyser || !this.analyserBuffer) return;
@@ -167,117 +226,112 @@ export class MouthSignal {
     }
     const rms = Math.sqrt(sum / this.analyserBuffer.length);
     const mapped = Math.min(1, rms * 12);
-    this.setValue(mapped);
+    this.setFrame({ value: mapped, phoneme: 'rms', visemeId: mapped > 0.6 ? 8 : mapped > 0.3 ? 5 : 2 });
   }
 
   /**
-   * 播放 mouth 时间轴。
-   * @param {EnvelopePoint[]} timeline - 按时间排序的 mouth 值。
-   * @param {number} startTimestamp - requestAnimationFrame 的毫秒时间戳。
+   * 使用时间轴驱动口型。
+   * @param {TimelinePoint[]} timeline - mouth 时间轴。
+   * @param {() => number} clock - 返回当前播放进度（秒）的函数，例如 AudioElement.currentTime。
    */
-  playEnvelope(timeline, startTimestamp) {
-    this.envelopePlayback = new EnvelopePlayback(timeline, startTimestamp, (v) => this.setValue(v));
+  playTimeline(timeline, clock) {
+    this.timelinePlayback = new TimelinePlayback(timeline, clock, (value, visemeId, phoneme) => {
+      this.setFrame({ value, visemeId, phoneme });
+    });
   }
 
   /**
-   * envelope 播放器驱动。
-   * @param {number} timestamp - 当前帧时间戳（毫秒）。
-   */
-  updateFromEnvelope(timestamp) {
-    if (!this.envelopePlayback) return;
-    const done = this.envelopePlayback.update(timestamp);
-    if (done) {
-      this.envelopePlayback = null;
-    }
-  }
-
-  /**
-   * 通知所有订阅者。
+   * 广播当前帧给所有订阅者。
    */
   emit() {
     for (const fn of this.subscribers) {
-      fn(this.value);
+      fn(this.frame);
     }
   }
 }
 
 /**
- * EnvelopePlayback 负责根据时间轴插值 mouth 值。
+ * TimelinePlayback 根据给定 clock 对时间轴做线性插值。
  */
-class EnvelopePlayback {
+class TimelinePlayback {
   /**
-   * @param {EnvelopePoint[]} timeline - mouth 时间轴。
-   * @param {number} startTimestamp - 播放开始时的帧时间戳（毫秒）。
-   * @param {(value: number) => void} onValue - 更新回调。
+   * @param {TimelinePoint[]} timeline - mouth 时间轴。
+   * @param {() => number} clock - 播放进度函数，返回秒。
+   * @param {(value: number, visemeId: number, phoneme: string) => void} onFrame - 帧更新回调。
    */
-  constructor(timeline, startTimestamp, onValue) {
+  constructor(timeline, clock, onFrame) {
     this.timeline = timeline;
-    this.startTimestamp = startTimestamp;
-    this.onValue = onValue;
+    this.clock = clock;
+    this.onFrame = onFrame;
     this.duration = timeline.length > 0 ? timeline[timeline.length - 1].t : 0;
+    this.index = 0;
   }
 
   /**
-   * @param {number} timestamp - 当前帧时间戳（毫秒）。
-   * @returns {boolean} 是否播放结束。
+   * 更新一次口型，返回是否播放完毕。
+   * @returns {boolean} 是否结束。
    */
-  update(timestamp) {
-    const elapsed = (timestamp - this.startTimestamp) / 1000;
-    if (elapsed >= this.duration) {
-      this.onValue(this.timeline.length ? this.timeline[this.timeline.length - 1].v : SIGNAL_CONFIG.minValue);
+  update() {
+    if (this.timeline.length === 0) {
+      this.onFrame(SIGNAL_CONFIG.minValue, 0, 'idle');
       return true;
     }
-    const nextIndex = this.timeline.findIndex((point) => point.t > elapsed);
-    if (nextIndex === -1) {
-      this.onValue(this.timeline[this.timeline.length - 1].v);
+    const time = this.clock();
+    if (!Number.isFinite(time)) {
       return false;
     }
-    if (nextIndex === 0) {
-      this.onValue(this.timeline[0].v);
-      return false;
+    if (time >= this.duration) {
+      const last = this.timeline[this.timeline.length - 1];
+      this.onFrame(last.v, last.visemeId, last.phoneme || 'tail');
+      return true;
     }
-    const prev = this.timeline[nextIndex - 1];
-    const next = this.timeline[nextIndex];
-    const span = next.t - prev.t || 0.001;
-    const factor = (elapsed - prev.t) / span;
-    const value = prev.v + (next.v - prev.v) * factor;
-    this.onValue(value);
+    while (this.index < this.timeline.length && this.timeline[this.index].t < time) {
+      this.index += 1;
+    }
+    const next = this.timeline[this.index] ?? this.timeline[this.timeline.length - 1];
+    const prev = this.timeline[this.index - 1] ?? next;
+    const span = Math.max(next.t - prev.t, 1e-6);
+    const ratio = (time - prev.t) / span;
+    const value = prev.v + (next.v - prev.v) * ratio;
+    const visemeId = ratio > 0.5 ? next.visemeId : prev.visemeId;
+    const phoneme = ratio > 0.5 ? (next.phoneme || 'blend') : (prev.phoneme || 'blend');
+    this.onFrame(value, visemeId, phoneme);
     return false;
   }
 }
 
 /**
- * 根据文本生成一个占位的 mouth 时间轴，字符越多口型越丰富。
+ * 生成一个占位时间轴，确保没有音频时也能看到口型变化。
  * @param {string} text - 输入文本。
- * @returns {EnvelopePoint[]} 简单的占位时间轴。
+ * @returns {TimelinePoint[]} 占位时间轴。
  */
 export const generatePlaceholderTimeline = (text) => {
   const sanitized = text.trim();
   if (!sanitized) {
     return [
-      { t: 0, v: 0 },
-      { t: 0.3, v: 0.1 },
-      { t: 0.6, v: 0 },
+      { t: 0, v: 0.1, visemeId: 0, phoneme: 'idle' },
+      { t: 0.3, v: 0.4, visemeId: 4, phoneme: 'idle' },
+      { t: 0.6, v: 0.1, visemeId: 0, phoneme: 'idle' },
     ];
   }
   const points = [];
-  const baseDuration = Math.max(1, sanitized.length * 0.08);
-  const syllableCount = Math.max(3, Math.floor(sanitized.length / 2));
-  for (let i = 0; i < syllableCount; i += 1) {
-    const t = (i / syllableCount) * baseDuration;
-    const v = 0.4 + Math.abs(Math.sin(i * 1.3)) * 0.5;
-    points.push({ t, v });
-    points.push({ t: t + baseDuration / syllableCount / 2, v: 0.15 });
+  const duration = Math.max(1.2, sanitized.length * 0.08);
+  const syllables = Math.max(4, Math.floor(sanitized.length / 2));
+  for (let i = 0; i <= syllables; i += 1) {
+    const t = (i / syllables) * duration;
+    const peak = 0.35 + Math.abs(Math.sin(i * 1.2)) * 0.55;
+    const visemeId = peak > 0.8 ? 8 : peak > 0.6 ? 7 : peak > 0.4 ? 5 : 2;
+    points.push({ t, v: peak, visemeId, phoneme: 'placeholder' });
   }
-  points.push({ t: baseDuration + 0.2, v: 0 });
+  points.push({ t: duration + 0.2, v: 0.1, visemeId: 0, phoneme: 'placeholder' });
   return points;
 };
 
 /**
- * 使用 Web Speech API 朗读文本，并在边界事件上触发口型脉冲。
- * @param {SpeechSynthesisUtterance} utterance - 已配置好的 utterance。
+ * 使用 Web Speech API 朗读文本并触发口型脉冲。
+ * @param {SpeechSynthesisUtterance} utterance - 配置好的 utterance。
  * @param {MouthSignal} signal - 口型控制器。
- * @returns {Promise<void>} 朗读完成时解析。
+ * @returns {Promise<void>} 完成时解析。
  */
 export const speakWithWebSpeech = (utterance, signal) => {
   return new Promise((resolve, reject) => {
@@ -287,7 +341,7 @@ export const speakWithWebSpeech = (utterance, signal) => {
     }
 
     const handleBoundary = () => {
-      signal.pulse({ strength: 0.9 });
+      signal.pulse({ strength: 0.85, visemeId: 4, phoneme: 'boundary' });
     };
 
     const handleStart = () => {
@@ -310,7 +364,7 @@ export const speakWithWebSpeech = (utterance, signal) => {
     const handleError = (event) => {
       cleanup();
       signal.stop();
-      reject(event.error || new Error('Speech 合成出现未知错误'));
+      reject(event.error || new Error('Web Speech 出现未知错误'));
     };
 
     utterance.addEventListener('boundary', handleBoundary);
@@ -324,36 +378,33 @@ export const speakWithWebSpeech = (utterance, signal) => {
 };
 
 /**
- * 回退策略：请求 `/tts` 接口，若返回音频则分析音量包络，否则则使用占位时间轴。
- * @param {string} text - 待转换文本。
- * @param {MouthSignal} signal - 口型控制器。
- * @param {AbortSignal} [abortSignal] - 允许外部取消。
+ * 请求服务端 `/tts` 接口，返回 JSON 结果。
+ * @param {string} text - 合成文本。
+ * @param {{ voice?: string, rate?: number, provider?: string, abortSignal?: AbortSignal }} options - 请求参数。
+ * @returns {Promise<{ audioUrl: string, mouthTimeline: TimelinePoint[], duration: number, provider: string, sampleRate: number }>} 结果。
  */
-export const fetchTtsFallback = async (text, signal, abortSignal) => {
-  const response = await fetch(`/tts?text=${encodeURIComponent(text)}`, {
+export const requestServerTts = async (text, options = {}) => {
+  const params = new URLSearchParams({ text });
+  if (options.voice) params.set('voice', options.voice);
+  if (options.rate) params.set('rate', String(options.rate));
+  if (options.provider) params.set('provider', options.provider);
+  const response = await fetch(resolveServerUrl(`/tts?${params.toString()}`), {
     method: 'GET',
-    signal: abortSignal,
+    signal: options.abortSignal,
   });
-
-  const contentType = response.headers.get('content-type') || '';
-  if (contentType.startsWith('audio/')) {
-    await playWithAnalyser(response, signal);
-    return;
+  if (!response.ok) {
+    throw new Error(`TTS 请求失败：${response.status}`);
   }
-
-  const message = await response.text();
-  console.info('TTS 占位响应：', message);
-  const timeline = generatePlaceholderTimeline(text);
-  signal.start();
-  signal.playEnvelope(timeline, performance.now());
+  const data = await response.json();
+  return data;
 };
 
 /**
- * 将音频响应传入 Web Audio，实时分析能量。
- * @param {Response} response - fetch 返回的 Response。
- * @param {MouthSignal} signal - 口型控制器。
+ * 使用 Web Audio analyser 播放音频并驱动口型，作为兜底方案。
+ * @param {Response} response - fetch 返回的音频响应。
+ * @param {MouthSignal} signal - mouth 控制器。
  */
-const playWithAnalyser = async (response, signal) => {
+export const playWithAnalyser = async (response, signal) => {
   const arrayBuffer = await response.arrayBuffer();
   const audioContext = new AudioContext();
   const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
@@ -365,14 +416,9 @@ const playWithAnalyser = async (response, signal) => {
   signal.attachAnalyser(analyser);
   signal.start();
   source.start();
-
-  await new Promise((resolve) => {
-    source.addEventListener('ended', () => {
-      resolve();
-    });
-  });
-
+  await new Promise((resolve) => source.addEventListener('ended', resolve));
   signal.detachAnalyser();
   signal.stop();
   await audioContext.close();
 };
+

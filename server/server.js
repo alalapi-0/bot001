@@ -1,62 +1,170 @@
 /**
  * @file server.js
- * @description stickbot 服务端占位实现，基于 Express 搭建，暴露 `/chat` 与 `/tts` 两个接口。
- * 设计目标：
- * 1. 结构足够简单，方便后续对接真实的大模型与 TTS 服务；
- * 2. 遵循 JSON/文本返回格式，让前端轻松消费；
- * 3. 保持大量中文注释，便于团队成员快速理解扩展点。
+ * @description stickbot 第二轮服务端入口：接入 eSpeak NG 生成真实音频与口型时间轴，并提供下载接口与清理任务。
  */
 
+import 'dotenv/config';
+import fs from 'fs';
+import path from 'path';
 import express from 'express';
+import { loadServerConfig, ensureTmpDir } from './src/config.js';
+import { createProviders } from './src/tts/providerFactory.js';
 
 /**
- * 读取端口号：默认 8787，可通过环境变量 `STICKBOT_SERVER_PORT` 覆盖。
- * 由于当前项目仅为占位 Demo，这里不引入 dotenv，直接读取 `process.env`。
+ * 加载配置与初始化资源目录。
  */
-const PORT = Number(process.env.STICKBOT_SERVER_PORT || 8787);
+const config = await loadServerConfig();
+ensureTmpDir(config.tmpDir);
+const providers = createProviders(config);
+sweepTmpFiles();
 
 /**
- * 创建 Express 应用实例，并挂载常用中间件。
+ * 初始化 Express 应用。
  */
 const app = express();
 app.use(express.json());
 
 /**
- * 根路由返回简单健康检查。
+ * 本地开发默认允许任意来源跨域，生产环境可在 .env 中配置白名单。
+ */
+if (config.cors.enabled) {
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (!origin) {
+      next();
+      return;
+    }
+    let allowed = false;
+    if (config.cors.allowAllOrigins) {
+      allowed = true;
+    } else if (config.cors.whitelist.includes(origin)) {
+      allowed = true;
+    }
+    if (allowed) {
+      res.header('Access-Control-Allow-Origin', origin);
+      res.header('Access-Control-Allow-Credentials', 'true');
+      res.header('Access-Control-Allow-Headers', 'Content-Type');
+      res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    }
+    if (req.method === 'OPTIONS') {
+      res.sendStatus(204);
+      return;
+    }
+    next();
+  });
+}
+
+/**
+ * 健康检查。
  */
 app.get('/', (_req, res) => {
   res.json({
     name: 'stickbot-server',
     status: 'ok',
-    message: '欢迎使用 stickbot 占位服务端，等待对接真实 TTS/LLM 能力。',
+    providers: Object.keys(providers),
+    tmpDir: config.tmpDir,
+    sampleRate: config.sampleRate,
   });
 });
 
 /**
- * POST /chat 接口：当前仅回显请求，未来可接入大模型。
+ * 聊天接口保留占位实现，确保第一轮调用仍能使用。
  */
 app.post('/chat', (req, res) => {
   const { messages = [] } = req.body || {};
   res.json({
-    reply: '这是 stickbot 的占位回复。请在 server/server.js 中对接真实聊天服务。',
+    reply: 'stickbot 第二轮：聊天接口仍为占位实现，请接入真实 LLM。',
     echo: messages,
-    hint: '未来可将此处接入 OpenAI、智谱、通义千问等服务，注意通过 .env 管理密钥。',
+    hint: '可在此处接入 OpenAI/智谱/通义千问等模型，注意密钥管理。',
   });
 });
 
 /**
- * GET /tts 接口：当前返回文本提示，告知开发者如何集成真实 TTS。
- * 真实环境应返回音频 URL 与 mouthTimeline，格式示例见 server/README.md。
+ * 将临时目录下的音频暴露为下载路由，路径形如 `/audio/<uuid>.wav`。
  */
-app.get('/tts', (req, res) => {
-  const { text = '' } = req.query;
-  res.type('text/plain').send(`stickbot TTS 占位接口已接收到文本：${text}\n请替换为真实 TTS 服务并返回音频 URL 与 mouthTimeline。`);
+app.get('/audio/:filename', (req, res) => {
+  const { filename } = req.params;
+  if (!/^[a-z0-9-]+\.wav$/i.test(filename)) {
+    res.status(400).json({ message: '非法文件名。' });
+    return;
+  }
+  const filePath = path.join(config.tmpDir, filename);
+  if (!fs.existsSync(filePath)) {
+    res.status(404).json({ message: '文件不存在或已过期。' });
+    return;
+  }
+  res.type('audio/wav');
+  res.sendFile(filePath);
 });
 
 /**
- * 启动服务器并输出日志。
+ * 核心 TTS 接口：根据 provider 调用适配器并返回音频 URL 与 mouth 时间轴。
  */
-app.listen(PORT, () => {
-  // eslint-disable-next-line no-console -- 演示项目允许直接打印
-  console.log(`stickbot server 已启动，监听端口 ${PORT}`);
+app.get('/tts', async (req, res) => {
+  try {
+    const text = String(req.query.text || '').trim();
+    if (!text) {
+      res.status(400).json({ message: 'text 参数不能为空。' });
+      return;
+    }
+    const providerKey = /** @type {'espeak' | 'azure'} */ (req.query.provider || config.defaultProvider);
+    const provider = providers[providerKey];
+    if (!provider) {
+      res.status(400).json({ message: `未找到 provider: ${providerKey}` });
+      return;
+    }
+    const voice = req.query.voice ? String(req.query.voice) : undefined;
+    const rate = req.query.rate ? Number(req.query.rate) : undefined;
+
+    const result = await provider.synthesize(text, { voice, rate });
+    const audioFilename = `${result.id}.wav`;
+    const audioUrl = `/audio/${audioFilename}`;
+
+    res.json({
+      audioUrl,
+      audioType: result.audioType,
+      mouthTimeline: result.mouthTimeline,
+      duration: result.duration,
+      provider: providerKey,
+      sampleRate: config.sampleRate,
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'TTS 处理失败', detail: error instanceof Error ? error.message : String(error) });
+  }
 });
+
+/**
+ * 定时清理临时目录，移除过期的音频文件。
+ */
+function sweepTmpFiles() {
+  const now = Date.now();
+  fs.promises
+    .readdir(config.tmpDir)
+    .then((files) => {
+      files
+        .filter((name) => name.endsWith('.wav') || name.endsWith('.pho'))
+        .forEach((name) => {
+          const filePath = path.join(config.tmpDir, name);
+          fs.promises
+            .stat(filePath)
+            .then((stat) => {
+              if (now - stat.mtimeMs > config.cleanupTTL) {
+                fs.promises.unlink(filePath).catch(() => {});
+              }
+            })
+            .catch(() => {});
+        });
+    })
+    .catch(() => {});
+}
+
+setInterval(sweepTmpFiles, config.cleanupIntervalMs).unref();
+
+/**
+ * 启动服务器。
+ */
+app.listen(config.port, () => {
+  // eslint-disable-next-line no-console -- Demo 项目允许直接输出日志
+  console.log(`stickbot server listening on ${config.port}`);
+});
+
