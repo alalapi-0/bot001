@@ -1,0 +1,30 @@
+{
+  "name": "stickbot",
+  "version": "0.1.0",
+  "description": "最小但可运行的 stickbot 项目骨架，提供网页端火柴人语音口型演示与服务端占位接口。",
+  "type": "module",
+  "scripts": {
+    "dev:web": "http-server web -p 5173 -c-1",
+    "dev:server": "node server/server.js",
+    "dev": "npm-run-all --parallel dev:web dev:server",
+    "lint": "node --check server/server.js web/js/main.js web/js/avatar.js web/js/lipsync.js"
+  },
+  "keywords": [
+    "stickbot",
+    "canvas",
+    "speech",
+    "lipsync"
+  ],
+  "author": "stickbot maintainers",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "http-server": "^14.1.1",
+    "npm-run-all": "^4.1.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
