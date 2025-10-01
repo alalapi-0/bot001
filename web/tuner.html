@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>stickbot 参数 Tuner</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+        background: #f4f4f7;
+        color: #111827;
+      }
+
+      main {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 24px;
+        padding: 24px;
+        box-sizing: border-box;
+      }
+
+      .preview-column {
+        flex: 1 1 480px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        align-items: stretch;
+      }
+
+      .preview-card {
+        background: #fff;
+        border-radius: 16px;
+        box-shadow: 0 18px 38px rgba(15, 23, 42, 0.12);
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      canvas {
+        width: 100%;
+        border-radius: 12px;
+        background: #fff;
+      }
+
+      #avatar-preview {
+        max-width: 480px;
+        align-self: center;
+        box-shadow: inset 0 0 0 1px rgba(99, 102, 241, 0.14);
+      }
+
+      #curve-canvas {
+        height: 160px;
+        box-shadow: inset 0 0 0 1px rgba(14, 165, 233, 0.2);
+      }
+
+      .legend {
+        display: flex;
+        gap: 24px;
+        flex-wrap: wrap;
+        font-size: 13px;
+        color: #4b5563;
+      }
+
+      .legend span::before {
+        content: '';
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 999px;
+        margin-right: 6px;
+        vertical-align: middle;
+      }
+
+      .legend span.raw::before {
+        background: #6366f1;
+      }
+
+      .legend span.smooth::before {
+        background: #f97316;
+      }
+
+      aside.panel {
+        width: 360px;
+        min-width: 320px;
+        background: #fff;
+        border-radius: 16px;
+        box-shadow: 0 18px 38px rgba(15, 23, 42, 0.1);
+        padding: 24px;
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 24px;
+      }
+
+      .param-list {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+
+      .param-item {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .param-item label {
+        font-size: 14px;
+        font-weight: 600;
+        color: #1f2937;
+      }
+
+      .param-controls {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+      }
+
+      .param-controls input[type='range'] {
+        flex: 1;
+      }
+
+      .param-controls input[type='number'] {
+        width: 86px;
+        padding: 6px 8px;
+        border-radius: 8px;
+        border: 1px solid #d1d5db;
+        font-size: 14px;
+      }
+
+      textarea {
+        width: 100%;
+        min-height: 120px;
+        padding: 12px;
+        border-radius: 12px;
+        border: 1px solid #d1d5db;
+        font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+        font-size: 13px;
+        resize: vertical;
+        box-sizing: border-box;
+      }
+
+      .button-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
+      button {
+        border: none;
+        border-radius: 999px;
+        padding: 10px 18px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        background: #e5e7eb;
+        color: #1f2937;
+        transition: transform 0.08s ease, box-shadow 0.12s ease;
+      }
+
+      button.primary {
+        background: linear-gradient(135deg, #6366f1, #8b5cf6);
+        color: #fff;
+        box-shadow: 0 10px 20px rgba(99, 102, 241, 0.28);
+      }
+
+      button:active {
+        transform: translateY(1px) scale(0.99);
+        box-shadow: none;
+      }
+
+      .status {
+        font-size: 13px;
+        color: #6b7280;
+      }
+
+      @media (max-width: 960px) {
+        aside.panel {
+          width: 100%;
+        }
+        main {
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="preview-column">
+        <div class="preview-card">
+          <canvas id="avatar-preview" width="420" height="420"></canvas>
+          <div class="legend">
+            <span class="raw">原始 mouthTimeline</span>
+            <span class="smooth">平滑后 mouth</span>
+          </div>
+        </div>
+        <div class="preview-card">
+          <canvas id="curve-canvas" width="420" height="200"></canvas>
+          <p style="margin: 0; font-size: 13px; color: #4b5563;">
+            曲线叠加用于观察 EMA 平滑效果，可拖动右侧滑条实时更新。
+          </p>
+        </div>
+      </section>
+      <aside class="panel">
+        <div>
+          <h1>可视化调参面板 Tuner</h1>
+          <p style="margin: 8px 0 0; font-size: 14px; color: #4b5563;">
+            调整 stickbot 表情与平滑参数，导出 JSON 以供服务端或组件引用。
+          </p>
+        </div>
+        <div id="param-list" class="param-list"></div>
+        <div>
+          <label for="preset-json" style="display: block; font-weight: 600; margin-bottom: 8px;">导入 / 导出 JSON</label>
+          <textarea id="preset-json" placeholder="在此粘贴 JSON 后点击“从 JSON 粘贴导入”。"></textarea>
+          <div class="button-row" style="margin-top: 12px;">
+            <button id="export-btn" class="primary">导出 JSON</button>
+            <button id="copy-btn">复制 JSON</button>
+            <button id="download-btn">下载 JSON</button>
+            <button id="import-btn">从 JSON 粘贴导入</button>
+          </div>
+        </div>
+        <div class="status" id="status">参数将在本地浏览器保存，可随时恢复上次调参结果。</div>
+      </aside>
+    </main>
+    <script type="module" src="./js/tuner.js"></script>
+  </body>
+</html>

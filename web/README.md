@@ -5,6 +5,7 @@
 ## 目录结构
 
 - **`index.html`**：页面骨架与样式，包含渲染模式、TTS 供应器选择等控件。
+- **`tuner.html`**：可视化调参面板 Tuner，提供参数滑条、曲线叠加与 JSON 导入导出。
 - **`js/main.js`**：入口脚本，负责：
   - 根据用户输入调用服务端 `/tts`，优先消费 `mouthTimeline`；
   - 管理 Web Speech / 音量包络回退，并处理停止逻辑；
@@ -57,4 +58,21 @@ web/
 2. 在控制面板查看 `TTS 供应器` 选项，确认服务端返回的 `mouthTimeline` 是否生效（控制台会输出 `[stickbot] 使用服务端时间轴驱动口型。`）。
 3. 切换渲染模式观察差异，若 Sprite 未加载成功，会有提示信息。
 4. 开发自定义口型映射时，可在控制台打印 `viseme` 与 `phoneme`（`main.js` 已在进度条旁显示）。
+
+## 可视化调参面板 Tuner
+
+- 通过 `tuner.html` 打开调参页面：左侧为火柴人预览与 mouth 曲线叠加，右侧提供以下参数滑条：
+  - `mouthOpenScale`：嘴巴张开倍数，用于放大整体口型；
+  - `lipTension`：嘴唇收紧程度；
+  - `cornerCurve`：嘴角弯曲程度，正值上扬、负值下压；
+  - `eyeBlinkBias`：眨眼偏置，影响眨眼频率；
+  - `headNodAmp`：点头动作幅度；
+  - `swayAmp`：身体左右摆动幅度；
+  - `emaAlpha`：口型 EMA 平滑系数；
+  - `tickHz`：时间轴采样频率；
+  - `roundLipCompress`：圆唇收紧系数，用于压缩高口型。
+- 页面会将最新参数写入浏览器 `localStorage`，刷新后自动恢复。
+- 导出 JSON：点击“导出 JSON”生成当前参数文本，可继续使用“复制 JSON”或“下载 JSON”保留文件。
+- 从 JSON 粘贴导入：将外部预设粘贴到文本框中后点击按钮即可恢复参数。
+- 若页面检测到 `<stick-bot>` 组件，会调用 `setExpressionOverride(preset)`；否则使用内置火柴人预览演示实时效果。
 
