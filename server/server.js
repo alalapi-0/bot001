@@ -6,6 +6,7 @@
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
+import { createHash } from 'crypto';
 import express from 'express';
 import helmet from 'helmet';
 import { loadServerConfig, ensureTmpDir } from './src/config.js';
@@ -31,11 +32,26 @@ const metricsState = {
 const RATE_LIMIT_WINDOW_MS = 1000;
 const requestTimestamps = [];
 
+/**
+ * @typedef {{ payload: ReturnType<typeof buildResponsePayload>, expiresAt: number, size: number }} TtsCacheEntry
+ */
+
+/** @type {Map<string, TtsCacheEntry>} */
+const ttsCache = new Map();
+/** @type {number} */
+let ttsCacheBytes = 0;
+/** @type {Map<string, Promise<any>>} */
+const pendingSynths = new Map();
+
 class AuditLogger {
   constructor(dir) {
     this.dir = dir;
   }
 
+  /**
+   * 写入一条审计日志。
+   * @param {{ endpoint: string, provider: string, voice?: string, chars: number, durationSec: number, timelinePoints: number, elapsedMs: number, error: string | null, segment?: string | null }} entry - 日志内容。
+   */
   async log(entry) {
     const now = new Date();
     const iso = now.toISOString();
@@ -44,17 +60,23 @@ class AuditLogger {
     const duration = Number.isFinite(entry.durationSec) ? entry.durationSec.toFixed(3) : '0.000';
     const elapsed = Number.isFinite(entry.elapsedMs) ? entry.elapsedMs.toFixed(2) : '0.00';
     const sanitizedError = entry.error ? entry.error.replace(/\s+/g, ' ').slice(0, 200) : 'none';
-    const line = [
+    const lineParts = [
       `[${iso}]`,
       `endpoint=${entry.endpoint}`,
       `provider=${entry.provider}`,
       `voice=${entry.voice ?? '-'}`,
+    ];
+    if (entry.segment) {
+      lineParts.push(`segment=${entry.segment}`);
+    }
+    lineParts.push(
       `chars=${entry.chars}`,
       `duration=${duration}`,
       `timelinePoints=${entry.timelinePoints}`,
       `elapsedMs=${elapsed}`,
       `error=${sanitizedError}`,
-    ].join(' ');
+    );
+    const line = lineParts.join(' ');
     await fs.promises.appendFile(filePath, `${line}\n`);
   }
 }
@@ -100,6 +122,126 @@ function measureElapsedMs(start) {
 }
 
 const auditLogger = new AuditLogger(config.logDir);
+
+const estimatePayloadBytes = (payload) => {
+  try {
+    return Buffer.byteLength(JSON.stringify(payload), 'utf-8');
+  } catch (error) {
+    console.warn('[tts-cache] 序列化缓存条目失败', error);
+    return 0;
+  }
+};
+
+const buildCacheKey = ({ text, voice, rate, provider, segmentIndex, segmentCount, segmentTag }) => {
+  const normalizedVoice = voice || 'default';
+  const normalizedRate = Number.isFinite(rate) ? Number(rate).toFixed(3) : 'auto';
+  const normalizedSegmentIndex = Number.isFinite(segmentIndex) ? String(segmentIndex) : 'none';
+  const normalizedSegmentCount = Number.isFinite(segmentCount) ? String(segmentCount) : 'none';
+  const normalizedSegmentTag = segmentTag ? String(segmentTag) : 'none';
+  const base = `${provider}|${normalizedVoice}|${normalizedRate}|${normalizedSegmentIndex}|${normalizedSegmentCount}|${normalizedSegmentTag}|${text}`;
+  return createHash('sha1').update(base).digest('hex');
+};
+
+const removeCacheEntry = (key, entry) => {
+  if (!entry) {
+    entry = ttsCache.get(key);
+  }
+  if (!entry) {
+    return;
+  }
+  ttsCache.delete(key);
+  ttsCacheBytes -= entry.size;
+  if (ttsCacheBytes < 0) {
+    ttsCacheBytes = 0;
+  }
+};
+
+const pruneExpiredEntries = () => {
+  if (ttsCache.size === 0) {
+    return;
+  }
+  const now = Date.now();
+  for (const [key, entry] of ttsCache.entries()) {
+    if (entry.expiresAt <= now) {
+      removeCacheEntry(key, entry);
+    }
+  }
+};
+
+const enforceCacheLimit = () => {
+  if (ttsCache.size <= config.cache.maxEntries) {
+    return;
+  }
+  const limit = Math.max(0, config.cache.maxEntries);
+  while (ttsCache.size > limit) {
+    const oldestKey = ttsCache.keys().next().value;
+    if (typeof oldestKey === 'undefined') {
+      break;
+    }
+    const oldestEntry = ttsCache.get(oldestKey);
+    removeCacheEntry(oldestKey, oldestEntry);
+  }
+};
+
+const setCacheEntry = (key, payload) => {
+  pruneExpiredEntries();
+  if (ttsCache.has(key)) {
+    removeCacheEntry(key, ttsCache.get(key));
+  }
+  const size = estimatePayloadBytes(payload);
+  const entry = {
+    payload,
+    expiresAt: Date.now() + config.cache.ttlMs,
+    size,
+  };
+  ttsCache.set(key, entry);
+  ttsCacheBytes += size;
+  enforceCacheLimit();
+};
+
+const getCacheEntry = (key) => {
+  const entry = ttsCache.get(key);
+  if (!entry) {
+    return null;
+  }
+  if (entry.expiresAt <= Date.now()) {
+    removeCacheEntry(key, entry);
+    return null;
+  }
+  ttsCache.delete(key);
+  ttsCache.set(key, entry);
+  return entry.payload;
+};
+
+const buildResponsePayload = (result, providerKey) => {
+  const audioFilename = `${result.id}.wav`;
+  return {
+    audioUrl: `/audio/${audioFilename}`,
+    audioType: result.audioType,
+    mouthTimeline: result.mouthTimeline,
+    wordTimeline: result.wordTimeline,
+    duration: result.duration,
+    provider: providerKey,
+    sampleRate: config.sampleRate,
+  };
+};
+
+const resolveSegmentLabel = (segmentIndex, segmentCount, segmentTag) => {
+  if (segmentTag) {
+    return segmentTag;
+  }
+  if (Number.isFinite(segmentIndex) && Number.isFinite(segmentCount)) {
+    const safeIndex = Number(segmentIndex);
+    const safeCount = Math.max(0, Number(segmentCount));
+    if (safeCount > 0) {
+      return `${Math.max(0, safeIndex) + 1}/${safeCount}`;
+    }
+  }
+  if (Number.isFinite(segmentIndex)) {
+    return String(segmentIndex);
+  }
+  return null;
+};
 
 const rolesDir = path.resolve(process.cwd(), 'roles');
 const ROLE_CACHE_TTL_MS = 10_000;
@@ -323,70 +465,130 @@ app.get('/tts', async (req, res) => {
   const voice = req.query.voice ? String(req.query.voice) : undefined;
   const rate = req.query.rate ? Number(req.query.rate) : undefined;
 
-  if (!consumeRateLimit()) {
-    res.status(429).json({ message: '请求过于频繁，请稍后再试。' });
-    return;
-  }
-  if (config.limits.maxConcurrency > 0 && metricsState.activeSynths >= config.limits.maxConcurrency) {
-    res.status(429).json({ message: '当前合成请求过多，请稍后再试。' });
+  const rawSegmentIndex = req.query.segmentIndex;
+  const rawSegmentCount = req.query.segmentCount;
+  const parsedSegmentIndex = typeof rawSegmentIndex !== 'undefined' ? Number(rawSegmentIndex) : undefined;
+  const parsedSegmentCount = typeof rawSegmentCount !== 'undefined' ? Number(rawSegmentCount) : undefined;
+  const segmentIndex = Number.isFinite(parsedSegmentIndex) ? parsedSegmentIndex : undefined;
+  const segmentCount = Number.isFinite(parsedSegmentCount) ? parsedSegmentCount : undefined;
+  const segmentTag = req.query.segmentId
+    ? String(req.query.segmentId)
+    : req.query.segmentKey
+      ? String(req.query.segmentKey)
+      : undefined;
+
+  const cacheKey = buildCacheKey({
+    text,
+    voice,
+    rate,
+    provider: providerKey,
+    segmentIndex,
+    segmentCount,
+    segmentTag,
+  });
+  const cachedPayload = getCacheEntry(cacheKey);
+  if (cachedPayload) {
+    res.json(cachedPayload);
     return;
   }
 
+  let synthPromise = pendingSynths.get(cacheKey);
+  if (!synthPromise) {
+    if (!consumeRateLimit()) {
+      res.status(429).json({ message: '请求过于频繁，请稍后再试。' });
+      return;
+    }
+    if (config.limits.maxConcurrency > 0 && metricsState.activeSynths >= config.limits.maxConcurrency) {
+      res.status(429).json({ message: '当前合成请求过多，请稍后再试。' });
+      return;
+    }
+    synthPromise = synthesizeAndCache({
+      provider,
+      providerKey,
+      text,
+      voice,
+      rate,
+      charCount,
+      cacheKey,
+      segmentIndex,
+      segmentCount,
+      segmentTag,
+    });
+    pendingSynths.set(cacheKey, synthPromise);
+    synthPromise.finally(() => {
+      pendingSynths.delete(cacheKey);
+    });
+  }
+
+  try {
+    const payload = await synthPromise;
+    res.json(payload);
+  } catch (error) {
+    res.status(500).json({ message: 'TTS 处理失败', detail: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+const synthesizeAndCache = async ({
+  provider,
+  providerKey,
+  text,
+  voice,
+  rate,
+  charCount,
+  cacheKey,
+  segmentIndex,
+  segmentCount,
+  segmentTag,
+}) => {
   metricsState.activeSynths += 1;
   const started = process.hrtime.bigint();
-  let result;
+  let synthResult;
   try {
-    result = await provider.synthesize(text, { voice, rate });
+    synthResult = await provider.synthesize(text, { voice, rate });
     const elapsedMs = measureElapsedMs(started);
     recordSynthMetrics(elapsedMs);
+    const payload = buildResponsePayload(synthResult, providerKey);
+    setCacheEntry(cacheKey, payload);
+    const segmentLabel = resolveSegmentLabel(segmentIndex, segmentCount, segmentTag);
     auditLogger
       .log({
         endpoint: 'tts',
         provider: providerKey,
         voice,
         chars: charCount,
-        durationSec: result.duration ?? 0,
-        timelinePoints: Array.isArray(result.mouthTimeline) ? result.mouthTimeline.length : 0,
+        durationSec: synthResult.duration ?? 0,
+        timelinePoints: Array.isArray(synthResult.mouthTimeline) ? synthResult.mouthTimeline.length : 0,
         elapsedMs,
         error: null,
+        segment: segmentLabel,
       })
       .catch((error) => {
         console.warn('写入审计日志失败', error);
       });
-
-    const audioFilename = `${result.id}.wav`;
-    const audioUrl = `/audio/${audioFilename}`;
-
-    res.json({
-      audioUrl,
-      audioType: result.audioType,
-      mouthTimeline: result.mouthTimeline,
-      wordTimeline: result.wordTimeline,
-      duration: result.duration,
-      provider: providerKey,
-      sampleRate: config.sampleRate,
-    });
+    return payload;
   } catch (error) {
     const elapsedMs = measureElapsedMs(started);
+    const segmentLabel = resolveSegmentLabel(segmentIndex, segmentCount, segmentTag);
     auditLogger
       .log({
         endpoint: 'tts',
         provider: providerKey,
         voice,
         chars: charCount,
-        durationSec: result?.duration ?? 0,
-        timelinePoints: Array.isArray(result?.mouthTimeline) ? result.mouthTimeline.length : 0,
+        durationSec: synthResult?.duration ?? 0,
+        timelinePoints: Array.isArray(synthResult?.mouthTimeline) ? synthResult.mouthTimeline.length : 0,
         elapsedMs,
         error: error instanceof Error ? error.message : String(error),
+        segment: segmentLabel,
       })
       .catch((logError) => {
         console.warn('写入审计日志失败', logError);
       });
-    res.status(500).json({ message: 'TTS 处理失败', detail: error instanceof Error ? error.message : String(error) });
+    throw error;
   } finally {
     metricsState.activeSynths = Math.max(0, metricsState.activeSynths - 1);
   }
-});
+};
 
 /**
  * 将秒数格式化为 WebVTT 时间戳。
@@ -504,6 +706,7 @@ app.get('/tts/vtt', async (req, res) => {
 
 app.get('/metrics', async (_req, res) => {
   ensureDailyCounters();
+  pruneExpiredEntries();
   let tmpFileCount = 0;
   try {
     const entries = await fs.promises.readdir(config.tmpDir);
@@ -517,6 +720,8 @@ app.get('/metrics', async (_req, res) => {
     `daily_synth_count=${metricsState.dailyCount}`,
     `avg_synth_seconds=${avgSeconds.toFixed(3)}`,
     `tmp_files=${tmpFileCount}`,
+    `tts_cache_entries=${ttsCache.size}`,
+    `tts_cache_bytes=${ttsCacheBytes}`,
   ];
   res.type('text/plain').send(lines.join('\n'));
 });

@@ -78,6 +78,69 @@ let lastActiveWordIndex = -1;
 let wordStatusResetTimer = null;
 /** @type {boolean} */
 let audioDriving = false;
+/** @type {TimelinePlayer|null} */
+let activeTimelinePlayer = null;
+
+const TIMELINE_PREFS = (() => {
+  const defaults = {
+    prefetchThreshold: 0.7,
+    segmentMinChars: 80,
+    segmentMaxChars: 220,
+    segmentMode: 'auto',
+    latencyCompensation: {
+      enabled: true,
+      thresholdMs: 160,
+      maxLeadMs: 320,
+    },
+  };
+  if (typeof window === 'undefined') {
+    return defaults;
+  }
+  const overrides =
+    typeof window.STICKBOT_TIMELINE_PREFS === 'object' && window.STICKBOT_TIMELINE_PREFS
+      ? window.STICKBOT_TIMELINE_PREFS
+      : {};
+  const threshold =
+    typeof overrides.prefetchThreshold === 'number'
+      ? Math.min(0.95, Math.max(0.1, overrides.prefetchThreshold))
+      : defaults.prefetchThreshold;
+  const minChars =
+    Number.isFinite(overrides.segmentMinChars) && overrides.segmentMinChars > 0
+      ? overrides.segmentMinChars
+      : defaults.segmentMinChars;
+  const maxChars =
+    Number.isFinite(overrides.segmentMaxChars) && overrides.segmentMaxChars > minChars
+      ? overrides.segmentMaxChars
+      : defaults.segmentMaxChars;
+  const latencyOverrides = typeof overrides.latencyCompensation === 'object' && overrides.latencyCompensation
+    ? overrides.latencyCompensation
+    : {};
+  const latencyCompensation = {
+    enabled:
+      typeof latencyOverrides.enabled === 'boolean'
+        ? latencyOverrides.enabled
+        : defaults.latencyCompensation.enabled,
+    thresholdMs:
+      Number.isFinite(latencyOverrides.thresholdMs) && latencyOverrides.thresholdMs >= 0
+        ? latencyOverrides.thresholdMs
+        : defaults.latencyCompensation.thresholdMs,
+    maxLeadMs:
+      Number.isFinite(latencyOverrides.maxLeadMs) && latencyOverrides.maxLeadMs >= 0
+        ? latencyOverrides.maxLeadMs
+        : defaults.latencyCompensation.maxLeadMs,
+  };
+  const segmentMode =
+    typeof overrides.segmentMode === 'string' && overrides.segmentMode
+      ? overrides.segmentMode
+      : defaults.segmentMode;
+  return {
+    prefetchThreshold: threshold,
+    segmentMinChars: minChars,
+    segmentMaxChars: maxChars,
+    segmentMode: segmentMode.toLowerCase(),
+    latencyCompensation,
+  };
+})();
 
 const AUTO_GAIN_STORAGE_KEY = 'stickbot:auto-gain';
 const ROLE_STORAGE_KEY = 'stickbot:active-role';
@@ -670,6 +733,614 @@ const stopWordHighlight = () => {
   lastActiveWordIndex = -1;
 };
 
+const appendWordTimelineEntries = (collector, timeline, offset) => {
+  if (!Array.isArray(timeline) || timeline.length === 0) {
+    return;
+  }
+  for (const item of timeline) {
+    const rawText = typeof item?.text === 'string' ? item.text.trim() : '';
+    if (!rawText) {
+      continue;
+    }
+    const startCandidates = [item?.tStart, item?.start, item?.t];
+    const endCandidates = [item?.tEnd, item?.end, item?.t];
+    const baseStart = startCandidates
+      .map((value) => (Number.isFinite(value) ? Number(value) : NaN))
+      .find((value) => Number.isFinite(value));
+    const baseEnd = endCandidates
+      .map((value) => (Number.isFinite(value) ? Number(value) : NaN))
+      .find((value) => Number.isFinite(value));
+    const resolvedStart = Number.isFinite(baseStart) ? baseStart : 0;
+    let resolvedEnd = Number.isFinite(baseEnd) ? baseEnd : resolvedStart;
+    if (resolvedEnd < resolvedStart) {
+      resolvedEnd = resolvedStart;
+    }
+    const offsetStart = resolvedStart + offset;
+    const offsetEnd = resolvedEnd + offset;
+    collector.push({
+      text: rawText,
+      tStart: offsetStart,
+      tEnd: offsetEnd > offsetStart ? offsetEnd : offsetStart + 0.001,
+    });
+  }
+};
+
+const splitTextIntoSegments = (text) => {
+  const sanitized = text.replace(/\r\n/g, '\n').trim();
+  if (!sanitized) {
+    return [];
+  }
+  if (TIMELINE_PREFS.segmentMode === 'off') {
+    return [sanitized];
+  }
+  const minLen = Math.max(10, TIMELINE_PREFS.segmentMinChars);
+  const maxLen = Math.max(minLen + 10, TIMELINE_PREFS.segmentMaxChars);
+  if (sanitized.length <= maxLen) {
+    return [sanitized];
+  }
+  const segments = [];
+  const pushSegment = (value) => {
+    const trimmed = value.replace(/\s+/g, ' ').trim();
+    if (trimmed) {
+      segments.push(trimmed);
+    }
+  };
+  const rawBlocks = sanitized.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
+  const blocks = rawBlocks.length > 0 ? rawBlocks : [sanitized];
+  const punctuationRe = /[。！？?!；;，,]/;
+  for (const block of blocks) {
+    if (block.length <= maxLen) {
+      pushSegment(block);
+      continue;
+    }
+    let buffer = '';
+    for (let i = 0; i < block.length; i += 1) {
+      const char = block[i];
+      buffer += char;
+      const isBoundary = punctuationRe.test(char) || char === '\n';
+      if (buffer.length >= minLen && isBoundary) {
+        pushSegment(buffer);
+        buffer = '';
+        continue;
+      }
+      if (buffer.length >= maxLen) {
+        pushSegment(buffer);
+        buffer = '';
+      }
+    }
+    if (buffer.trim()) {
+      pushSegment(buffer);
+    }
+  }
+  if (segments.length <= 1) {
+    return [sanitized];
+  }
+  for (let i = 1; i < segments.length; i += 1) {
+    const current = segments[i];
+    const previous = segments[i - 1];
+    if (current.length < minLen * 0.5 && previous.length + current.length <= maxLen) {
+      segments[i - 1] = `${previous} ${current}`.replace(/\s+/g, ' ').trim();
+      segments.splice(i, 1);
+      i -= 1;
+    }
+  }
+  return segments;
+};
+
+const getActivePlaybackClock = () => {
+  if (activeTimelinePlayer) {
+    return activeTimelinePlayer.getCurrentTime();
+  }
+  if (currentAudio) {
+    const time = currentAudio.currentTime;
+    return Number.isFinite(time) ? time : 0;
+  }
+  return 0;
+};
+
+class TimelinePlayer {
+  /**
+   * @param {{
+   *   mouthSignal: MouthSignal,
+   *   prefetchThreshold?: number,
+   *   latencyCompensation?: { enabled?: boolean, thresholdMs?: number, maxLeadMs?: number },
+   *   onSegmentPrepared?: (index: number, result: any, offset: number, duration: number) => void,
+   *   onSegmentStart?: (audio: HTMLAudioElement, index: number, clock: () => number) => void,
+   *   onSegmentEnd?: (index: number) => void,
+   *   onPlaybackComplete?: (context: { stopped: boolean }) => void,
+   *   onPlaybackError?: (error: Error) => void,
+   * }} options - 配置。
+   */
+  constructor(options) {
+    this.mouthSignal = options.mouthSignal;
+    this.prefetchThreshold = typeof options.prefetchThreshold === 'number' ? options.prefetchThreshold : 0.7;
+    const baseLatency = { enabled: true, thresholdMs: 160, maxLeadMs: 320 };
+    const latencyOverrides = options.latencyCompensation || {};
+    this.latencyComp = {
+      enabled:
+        typeof latencyOverrides.enabled === 'boolean' ? latencyOverrides.enabled : baseLatency.enabled,
+      thresholdMs:
+        Number.isFinite(latencyOverrides.thresholdMs) && latencyOverrides.thresholdMs >= 0
+          ? latencyOverrides.thresholdMs
+          : baseLatency.thresholdMs,
+      maxLeadMs:
+        Number.isFinite(latencyOverrides.maxLeadMs) && latencyOverrides.maxLeadMs >= 0
+          ? latencyOverrides.maxLeadMs
+          : baseLatency.maxLeadMs,
+    };
+    this.onSegmentPrepared = options.onSegmentPrepared;
+    this.onSegmentStart = options.onSegmentStart;
+    this.onSegmentEnd = options.onSegmentEnd;
+    this.onPlaybackComplete = options.onPlaybackComplete;
+    this.onPlaybackError = options.onPlaybackError;
+    this.segmentPromises = new Map();
+    this.segmentFetchers = new Map();
+    this.segmentDurations = [];
+    this.segmentOffsets = [];
+    this.loadedSegments = new Set();
+    this.prefetchIndices = new Set();
+    this.currentAudio = null;
+    this.currentIndex = -1;
+    this.monitorId = null;
+    this.latencyTimers = { threshold: null, maxLead: null };
+    this.latencyCleanup = null;
+    this.clockState = null;
+    this.mouthSignalActive = false;
+    this.totalSegments = 0;
+    this.stopped = false;
+    this.finished = false;
+    this.resolvePlayback = null;
+    this.rejectPlayback = null;
+  }
+
+  resetState() {
+    this.segmentPromises.clear();
+    this.segmentFetchers.clear();
+    this.segmentDurations = [];
+    this.segmentOffsets = [];
+    this.loadedSegments.clear();
+    this.prefetchIndices.clear();
+    if (this.monitorId !== null) {
+      cancelAnimationFrame(this.monitorId);
+      this.monitorId = null;
+    }
+    this.clearLatencyTimers();
+    if (this.latencyCleanup) {
+      this.latencyCleanup();
+      this.latencyCleanup = null;
+    }
+    this.clockState = null;
+    this.currentAudio = null;
+    this.currentIndex = -1;
+    this.mouthSignalActive = false;
+    this.stopped = false;
+    this.finished = false;
+  }
+
+  /**
+   * 开始播放。
+   * @param {any} initialResult - 首段结果。
+   * @param {Array<() => Promise<any>>} [fetchers] - 后续分段获取函数。
+   * @returns {Promise<void>} 播放结束。
+   */
+  async play(initialResult, fetchers = []) {
+    this.resetState();
+    this.totalSegments = 1 + fetchers.length;
+    this.segmentPromises.set(0, Promise.resolve(initialResult));
+    fetchers.forEach((fn, idx) => {
+      this.segmentFetchers.set(idx + 1, fn);
+    });
+    this.handleSegmentPrepared(0, initialResult);
+    return new Promise((resolve, reject) => {
+      this.resolvePlayback = resolve;
+      this.rejectPlayback = reject;
+      this.playSegment(0);
+    });
+  }
+
+  stop() {
+    if (this.finished) {
+      return;
+    }
+    this.stopped = true;
+    this.finish('stopped');
+  }
+
+  async playSegment(index) {
+    if (this.finished) {
+      return;
+    }
+    const promise = this.obtainSegmentPromise(index);
+    if (!promise) {
+      this.finish('done');
+      return;
+    }
+    let result;
+    try {
+      result = await promise;
+    } catch (error) {
+      this.finish('error', error);
+      return;
+    }
+    const { offset, duration } = this.handleSegmentPrepared(index, result);
+    try {
+      await this.runSegmentPlayback(result, index, offset, duration);
+    } catch (error) {
+      this.finish('error', error);
+      return;
+    }
+    if (this.finished) {
+      return;
+    }
+    if (index + 1 >= this.totalSegments) {
+      this.finish('done');
+    } else {
+      this.playSegment(index + 1);
+    }
+  }
+
+  obtainSegmentPromise(index) {
+    if (this.segmentPromises.has(index)) {
+      return this.segmentPromises.get(index);
+    }
+    const fetcher = this.segmentFetchers.get(index);
+    if (!fetcher) {
+      return null;
+    }
+    const promise = fetcher();
+    this.segmentPromises.set(index, promise);
+    promise
+      .then((result) => {
+        if (!this.finished) {
+          this.handleSegmentPrepared(index, result);
+        }
+        return result;
+      })
+      .catch((error) => {
+        if (!this.finished) {
+          this.finish('error', error);
+        }
+        throw error;
+      });
+    return promise;
+  }
+
+  handleSegmentPrepared(index, result) {
+    if (this.loadedSegments.has(index)) {
+      const offset = this.segmentOffsets[index] ?? this.computeOffset(index);
+      const duration = this.segmentDurations[index] ?? this.deriveDuration(result);
+      return { offset, duration };
+    }
+    const offset = this.computeOffset(index);
+    const duration = this.deriveDuration(result);
+    this.segmentOffsets[index] = offset;
+    this.segmentDurations[index] = duration;
+    this.loadedSegments.add(index);
+    if (typeof this.onSegmentPrepared === 'function') {
+      this.onSegmentPrepared(index, result, offset, duration);
+    }
+    return { offset, duration };
+  }
+
+  computeOffset(index) {
+    let offset = 0;
+    for (let i = 0; i < index; i += 1) {
+      const duration = this.segmentDurations[i];
+      if (Number.isFinite(duration) && duration > 0) {
+        offset += duration;
+      }
+    }
+    return offset;
+  }
+
+  deriveDuration(result) {
+    if (Number.isFinite(result?.duration) && result.duration > 0) {
+      return Number(result.duration);
+    }
+    const timeline = Array.isArray(result?.mouthTimeline) ? result.mouthTimeline : [];
+    if (timeline.length > 0) {
+      const last = timeline[timeline.length - 1];
+      if (Number.isFinite(last?.t)) {
+        return Math.max(0, Number(last.t));
+      }
+    }
+    return 0;
+  }
+
+  runSegmentPlayback(result, index, offset, expectedDuration) {
+    return new Promise((resolve, reject) => {
+      if (!result || !result.audioUrl) {
+        resolve();
+        return;
+      }
+      const audio = new Audio(resolveServerUrl(result.audioUrl));
+      audio.crossOrigin = 'anonymous';
+      this.currentAudio = audio;
+      this.currentIndex = index;
+      let settled = false;
+      const cleanup = () => {
+        if (this.monitorId !== null) {
+          cancelAnimationFrame(this.monitorId);
+          this.monitorId = null;
+        }
+        this.clearLatencyTimers();
+        if (this.latencyCleanup) {
+          this.latencyCleanup();
+          this.latencyCleanup = null;
+        }
+        audio.removeEventListener('play', handlePlay);
+        audio.removeEventListener('ended', handleEnded);
+        audio.removeEventListener('error', handleError);
+        audio.removeEventListener('timeupdate', handleTimeUpdate);
+        if (typeof this.onSegmentEnd === 'function') {
+          this.onSegmentEnd(index);
+        }
+      };
+
+      const finalize = (status, error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        if (status === 'error') {
+          reject(error);
+        } else {
+          resolve();
+        }
+      };
+
+      const handlePlay = () => {
+        if (this.finished) {
+          finalize('done');
+          return;
+        }
+        if (!this.mouthSignalActive) {
+          this.mouthSignal.start();
+          this.mouthSignalActive = true;
+        }
+        this.activateClock(audio, offset, index);
+        const clock = () => this.computeClock();
+        this.mouthSignal.playTimeline(Array.isArray(result.mouthTimeline) ? result.mouthTimeline : [], clock);
+        if (typeof this.onSegmentStart === 'function') {
+          this.onSegmentStart(audio, index, clock);
+        }
+        if (this.prefetchThreshold > 0) {
+          this.armPrefetch(index + 1, expectedDuration, audio);
+        }
+      };
+
+      const handleEnded = () => {
+        finalize('done');
+      };
+
+      const handleError = (event) => {
+        const error = event?.error instanceof Error ? event.error : new Error('音频播放失败');
+        finalize('error', error);
+      };
+
+      const handleTimeUpdate = () => {
+        if (this.clockState?.useFallback) {
+          this.switchToAudioClock();
+        }
+      };
+
+      audio.addEventListener('play', handlePlay, { once: true });
+      audio.addEventListener('ended', handleEnded, { once: true });
+      audio.addEventListener('error', handleError, { once: true });
+      audio.addEventListener('timeupdate', handleTimeUpdate);
+
+      audio.play().catch((error) => {
+        finalize('error', error instanceof Error ? error : new Error(String(error)));
+      });
+    });
+  }
+
+  activateClock(audio, offset, index) {
+    this.clockState = {
+      audio,
+      offsetBase: offset,
+      extraOffset: 0,
+      useFallback: false,
+      fallbackStart: 0,
+      fallbackLast: 0,
+    };
+    this.clearLatencyTimers();
+    if (this.latencyCleanup) {
+      this.latencyCleanup();
+      this.latencyCleanup = null;
+    }
+    if (index === 0 && this.latencyComp.enabled) {
+      const threshold = Number.isFinite(this.latencyComp.thresholdMs) ? this.latencyComp.thresholdMs : 0;
+      if (threshold > 0) {
+        this.latencyTimers.threshold = window.setTimeout(() => {
+          if (this.finished || !this.clockState || this.clockState.audio !== audio) {
+            return;
+          }
+          if (audio.currentTime > 0.02) {
+            return;
+          }
+          this.clockState.useFallback = true;
+          this.clockState.fallbackStart = performance.now();
+          this.clockState.fallbackLast = 0;
+          const maxLead = Number.isFinite(this.latencyComp.maxLeadMs) ? this.latencyComp.maxLeadMs : 0;
+          if (maxLead > 0) {
+            this.latencyTimers.maxLead = window.setTimeout(() => {
+              this.switchToAudioClock();
+            }, maxLead);
+          }
+        }, threshold);
+      }
+      const sync = () => {
+        if (this.clockState?.useFallback && audio.currentTime > 0.02) {
+          this.switchToAudioClock();
+        }
+      };
+      audio.addEventListener('playing', sync);
+      audio.addEventListener('timeupdate', sync);
+      this.latencyCleanup = () => {
+        audio.removeEventListener('playing', sync);
+        audio.removeEventListener('timeupdate', sync);
+        this.clearLatencyTimers();
+      };
+    }
+  }
+
+  switchToAudioClock() {
+    if (!this.clockState || !this.clockState.useFallback) {
+      return;
+    }
+    const audio = this.clockState.audio;
+    const fallbackElapsed = this.clockState.fallbackLast;
+    const audioTime = audio?.currentTime;
+    if (Number.isFinite(fallbackElapsed) && Number.isFinite(audioTime)) {
+      const drift = Math.max(0, fallbackElapsed - audioTime);
+      this.clockState.extraOffset = drift;
+    }
+    this.clockState.useFallback = false;
+    this.clearLatencyTimers();
+  }
+
+  clearLatencyTimers() {
+    if (this.latencyTimers.threshold !== null) {
+      clearTimeout(this.latencyTimers.threshold);
+      this.latencyTimers.threshold = null;
+    }
+    if (this.latencyTimers.maxLead !== null) {
+      clearTimeout(this.latencyTimers.maxLead);
+      this.latencyTimers.maxLead = null;
+    }
+  }
+
+  armPrefetch(nextIndex, expectedDuration, audio) {
+    if (nextIndex >= this.totalSegments || this.prefetchIndices.has(nextIndex)) {
+      return;
+    }
+    const threshold = Math.min(0.95, Math.max(0.1, this.prefetchThreshold));
+    const checkProgress = () => {
+      if (this.finished || this.currentAudio !== audio) {
+        return;
+      }
+      const fallbackDuration = Number.isFinite(expectedDuration) && expectedDuration > 0 ? expectedDuration : audio.duration;
+      if (Number.isFinite(fallbackDuration) && fallbackDuration > 0) {
+        const ratio = audio.currentTime / fallbackDuration;
+        if (ratio >= threshold) {
+          this.prefetchIndices.add(nextIndex);
+          this.obtainSegmentPromise(nextIndex);
+          this.monitorId = null;
+          return;
+        }
+      }
+      this.monitorId = requestAnimationFrame(checkProgress);
+    };
+    if (this.monitorId !== null) {
+      cancelAnimationFrame(this.monitorId);
+      this.monitorId = null;
+    }
+    this.monitorId = requestAnimationFrame(checkProgress);
+  }
+
+  computeClock() {
+    if (!this.clockState) {
+      return 0;
+    }
+    if (this.clockState.useFallback) {
+      const elapsed = (performance.now() - this.clockState.fallbackStart) / 1000;
+      this.clockState.fallbackLast = elapsed;
+      return this.clockState.offsetBase + elapsed;
+    }
+    const audio = this.clockState.audio;
+    const audioTime = audio?.currentTime;
+    if (!Number.isFinite(audioTime)) {
+      return this.clockState.offsetBase + this.clockState.extraOffset;
+    }
+    return this.clockState.offsetBase + audioTime + this.clockState.extraOffset;
+  }
+
+  getCurrentTime() {
+    return this.computeClock();
+  }
+
+  finish(status, error) {
+    if (this.finished) {
+      return;
+    }
+    this.finished = true;
+    this.stopped = true;
+    if (this.monitorId !== null) {
+      cancelAnimationFrame(this.monitorId);
+      this.monitorId = null;
+    }
+    this.clearLatencyTimers();
+    if (this.latencyCleanup) {
+      this.latencyCleanup();
+      this.latencyCleanup = null;
+    }
+    if (this.currentAudio) {
+      this.currentAudio.pause();
+    }
+    this.currentAudio = null;
+    if (status === 'error') {
+      const errorObj = error instanceof Error ? error : new Error(String(error));
+      if (typeof this.onPlaybackError === 'function') {
+        this.onPlaybackError(errorObj);
+      }
+      if (this.rejectPlayback) {
+        this.rejectPlayback(errorObj);
+      }
+    } else {
+      if (typeof this.onPlaybackComplete === 'function') {
+        this.onPlaybackComplete({ stopped: status === 'stopped' });
+      }
+      if (this.resolvePlayback) {
+        this.resolvePlayback();
+      }
+    }
+  }
+}
+
+const playWithTimelineSegments = async ({ initial, fetchers = [], wordCollector = null }) => {
+  const timelinePlayer = new TimelinePlayer({
+    mouthSignal,
+    prefetchThreshold: TIMELINE_PREFS.prefetchThreshold,
+    latencyCompensation: TIMELINE_PREFS.latencyCompensation,
+    onSegmentPrepared: (index, result, offset) => {
+      if (wordCollector) {
+        appendWordTimelineEntries(wordCollector, result?.wordTimeline || [], offset);
+        setServerWordTimeline([...wordCollector]);
+      }
+    },
+    onSegmentStart: (audio, index, clock) => {
+      currentAudio = audio;
+      currentAudioCleanup = () => timelinePlayer.stop();
+      if (activeWordTimeline.length > 0) {
+        startWordHighlight(() => getActivePlaybackClock());
+      } else {
+        stopWordHighlight();
+      }
+    },
+    onSegmentEnd: () => {},
+    onPlaybackComplete: () => {
+      currentAudio = null;
+      currentAudioCleanup = null;
+      stopWordHighlight();
+      mouthSignal.stop();
+    },
+    onPlaybackError: () => {
+      currentAudio = null;
+      currentAudioCleanup = null;
+      stopWordHighlight();
+      mouthSignal.stop();
+    },
+  });
+  activeTimelinePlayer = timelinePlayer;
+  try {
+    await timelinePlayer.play(initial, fetchers);
+  } finally {
+    activeTimelinePlayer = null;
+  }
+};
+
 /**
  * 输出调试信息。
  * @param {string} message - 文案。
@@ -692,6 +1363,10 @@ function stopCurrentPlayback() {
   if (placeholderTimer) {
     clearTimeout(placeholderTimer);
     placeholderTimer = null;
+  }
+  if (activeTimelinePlayer) {
+    activeTimelinePlayer.stop();
+    activeTimelinePlayer = null;
   }
   if (currentAudio) {
     currentAudio.pause();
@@ -735,7 +1410,7 @@ if (applyVttButton) {
     renderWordTimeline();
     refreshWordTimelineStatus('已加载手动 VTT 字幕。');
     if (currentAudio && !currentAudio.paused) {
-      startWordHighlight(() => currentAudio.currentTime);
+      startWordHighlight(() => getActivePlaybackClock());
     }
   });
 }
@@ -751,7 +1426,7 @@ if (clearVttButton) {
     if (currentAudio && !currentAudio.paused) {
       stopWordHighlight();
       if (activeWordTimeline.length > 0) {
-        startWordHighlight(() => currentAudio.currentTime);
+        startWordHighlight(() => getActivePlaybackClock());
       }
     }
   });
@@ -763,7 +1438,7 @@ if (useManualVttCheckbox) {
     refreshWordTimelineStatus();
     if (currentAudio && !currentAudio.paused) {
       if (activeWordTimeline.length > 0) {
-        startWordHighlight(() => currentAudio.currentTime);
+        startWordHighlight(() => getActivePlaybackClock());
       } else {
         stopWordHighlight();
       }
@@ -833,44 +1508,97 @@ playButton.addEventListener('click', async () => {
     const espeakRate = Math.max(80, Math.round(170 * speechRate));
     currentAbort = new AbortController();
 
-    let serverResult = null;
-    try {
-      serverResult = await requestServerTts(text, {
-        provider,
-        rate: espeakRate,
-        voice: activeRole?.voice,
-        abortSignal: currentAbort.signal,
-      });
-    } catch (error) {
-      console.warn('调用服务端 TTS 失败，将尝试 Web Speech 或回退。', error);
+    const segments = splitTextIntoSegments(text);
+    let useSegmentedPlayback = TIMELINE_PREFS.segmentMode !== 'off' && segments.length > 1;
+    let activeSegments = useSegmentedPlayback ? segments : [text];
+    const baseRequestOptions = {
+      provider,
+      rate: espeakRate,
+      voice: activeRole?.voice,
+      abortSignal: currentAbort.signal,
+    };
+
+    let initialResult = null;
+
+    if (useSegmentedPlayback) {
+      try {
+        initialResult = await requestServerTts(activeSegments[0], {
+          ...baseRequestOptions,
+          segmentIndex: 0,
+          segmentCount: activeSegments.length,
+          segmentId: `seg-1-of-${activeSegments.length}`,
+        });
+      } catch (error) {
+        console.warn('首段分段请求失败，将尝试整段播放。', error);
+      }
+      if (
+        !initialResult ||
+        !Array.isArray(initialResult.mouthTimeline) ||
+        initialResult.mouthTimeline.length === 0 ||
+        !initialResult.audioUrl
+      ) {
+        overlayInfo('分段首段未返回时间轴，改为整段请求。');
+        useSegmentedPlayback = false;
+        activeSegments = [text];
+        initialResult = null;
+      }
     }
 
-    if (serverResult) {
-      setServerWordTimeline(serverResult.wordTimeline || []);
-    } else {
+    if (!initialResult) {
+      try {
+        initialResult = await requestServerTts(text, baseRequestOptions);
+      } catch (error) {
+        console.warn('调用服务端 TTS 失败，将尝试 Web Speech 或回退。', error);
+      }
+      if (!initialResult) {
+        useSegmentedPlayback = false;
+        activeSegments = [text];
+      }
+    }
+
+    if (
+      initialResult &&
+      Array.isArray(initialResult.mouthTimeline) &&
+      initialResult.mouthTimeline.length > 0 &&
+      initialResult.audioUrl
+    ) {
+      const aggregatedWordTimeline = [];
       setServerWordTimeline([]);
-    }
-
-    if (serverResult && Array.isArray(serverResult.mouthTimeline) && serverResult.mouthTimeline.length > 0 && serverResult.audioUrl) {
-      overlayInfo('使用服务端时间轴驱动口型。');
+      const fetchers = useSegmentedPlayback
+        ? activeSegments.slice(1).map((segmentText, index) => () =>
+            requestServerTts(segmentText, {
+              ...baseRequestOptions,
+              segmentIndex: index + 1,
+              segmentCount: activeSegments.length,
+              segmentId: `seg-${index + 2}-of-${activeSegments.length}`,
+            }),
+          )
+        : [];
+      overlayInfo(useSegmentedPlayback ? '使用分段时间轴驱动口型。' : '使用服务端时间轴驱动口型。');
       audioDriving = true;
       try {
-        await playWithTimeline(serverResult);
+        await playWithTimelineSegments({
+          initial: initialResult,
+          fetchers,
+          wordCollector: aggregatedWordTimeline,
+        });
       } finally {
         audioDriving = false;
       }
-    } else if (serverResult && serverResult.audioUrl) {
+    } else if (initialResult && initialResult.audioUrl) {
       overlayInfo('服务端未提供时间轴，改用音量包络分析。');
       stopWordHighlight();
+      setServerWordTimeline([]);
       audioDriving = true;
       try {
-        await playWithAnalyserUrl(serverResult.audioUrl);
+        await playWithAnalyserUrl(initialResult.audioUrl);
       } finally {
         audioDriving = false;
       }
     } else if (useWebSpeechCheckbox.checked && 'speechSynthesis' in window) {
       overlayInfo('使用 Web Speech API 作为兜底。');
       stopWordHighlight();
+      setServerWordTimeline([]);
       const utterance = new SpeechSynthesisUtterance(text);
       const fallbackLang =
         activeRole?.voice && activeRole.voice.trim()
@@ -890,6 +1618,7 @@ playButton.addEventListener('click', async () => {
     } else {
       overlayInfo('无法使用服务端或 Web Speech，播放占位时间轴。');
       stopWordHighlight();
+      setServerWordTimeline([]);
       const placeholder = generatePlaceholderTimeline(text);
       const startTime = performance.now();
       audioDriving = true;
@@ -939,67 +1668,6 @@ if (!('speechSynthesis' in window)) {
   useWebSpeechCheckbox.checked = false;
   useWebSpeechCheckbox.disabled = true;
   overlayInfo('当前浏览器不支持 Web Speech API，已禁用相关选项。');
-}
-
-/**
- * 使用时间轴播放音频。
- * @param {{ audioUrl: string, mouthTimeline: import('./lipsync.js').TimelinePoint[], duration: number }} result - 服务端返回。
- */
-async function playWithTimeline(result) {
-  return new Promise((resolve, reject) => {
-    const audio = new Audio(resolveServerUrl(result.audioUrl));
-    currentAudio = audio;
-    audio.crossOrigin = 'anonymous';
-
-    let settled = false;
-
-    const finalize = (status, error) => {
-      if (settled) return;
-      settled = true;
-      audio.removeEventListener('play', handlePlay);
-      audio.removeEventListener('ended', handleEnded);
-      audio.removeEventListener('error', handleError);
-      currentAudio = null;
-      currentAudioCleanup = null;
-      stopWordHighlight();
-      mouthSignal.stop();
-      if (status === 'error') {
-        reject(error || new Error('音频播放失败'));
-      } else {
-        resolve();
-      }
-    };
-
-    const handlePlay = () => {
-      mouthSignal.start();
-      mouthSignal.playTimeline(result.mouthTimeline, () => audio.currentTime);
-      if (activeWordTimeline.length > 0) {
-        startWordHighlight(() => audio.currentTime);
-      } else {
-        stopWordHighlight();
-      }
-    };
-
-    const handleEnded = () => {
-      finalize('ended');
-    };
-
-    const handleError = (event) => {
-      finalize('error', event.error);
-    };
-
-    audio.addEventListener('play', handlePlay, { once: true });
-    audio.addEventListener('ended', handleEnded, { once: true });
-    audio.addEventListener('error', handleError, { once: true });
-
-    currentAudioCleanup = () => {
-      finalize('manual');
-    };
-
-    audio.play().catch((error) => {
-      finalize('error', error);
-    });
-  });
 }
 
 /**

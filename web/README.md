@@ -9,6 +9,8 @@
 - **`js/main.js`**：入口脚本，负责：
   - 根据用户输入调用服务端 `/tts`，优先消费 `mouthTimeline`；
   - 管理 Web Speech / 音量包络回退，并处理停止逻辑；
+  - 将长文本自动切分为多个片段，播放首段的同时在 70% 进度预取下一段；
+  - 针对首段音频加载延迟应用轻量级口型补偿，使角色尽快出声；
   - 与 `BigMouthAvatar`、`MouthSignal` 协同更新 UI。
 - **`js/avatar.js`**：实现 `BigMouthAvatar`，绘制火柴人身体 + 大嘴巴头，支持 Vector / Sprite 两种模式。
 - **`js/lipsync.js`**：封装口型信号、时间轴插值与服务端请求，提供 `resolveServerUrl` 以跨源访问。
@@ -29,6 +31,29 @@
 2. **Web Speech 边界事件**：若时间轴缺失且浏览器支持 `SpeechSynthesisUtterance`，则监听 `boundary` 事件触发脉冲，并衰减 mouth 值。
 3. **音量包络分析**：服务端仅返回音频时，通过 Web Audio `AnalyserNode` 计算 RMS 映射到 mouth，保持基本的张合效果。
 4. **占位时间轴**：以上途径均不可用时，会使用 `generatePlaceholderTimeline` 生成简易口型曲线，避免角色僵硬。
+
+## 分段预取与延迟补偿
+
+- 当输入文本较长时，前端会根据标点与字符长度自动拆分为 80–220 字左右的片段。首段合成完成后立即播放，同时在剩余时长的 70% 处触发下一段的请求，避免播放中断。
+- 首段音频若因为网络或缓存尚未写盘而延迟，`TimelinePlayer` 会短暂使用 `performance.now()` 构造的虚拟时钟提前驱动嘴型，并在音频真正开始时对齐时间轴，默认等待 160ms、最长提前 320ms。
+- 可通过 `window.STICKBOT_TIMELINE_PREFS.latencyCompensation` 微调补偿策略，例如在局域网部署时关闭，或提高 `maxLeadMs` 适配慢速云端存储。
+- 可通过在页面加载前设置 `window.STICKBOT_TIMELINE_PREFS` 覆盖行为，例如：
+
+  ```js
+  window.STICKBOT_TIMELINE_PREFS = {
+    segmentMode: 'auto',      // 取值 auto/off，关闭后始终整段请求
+    segmentMinChars: 80,
+    segmentMaxChars: 220,
+    prefetchThreshold: 0.7,
+    latencyCompensation: {
+      enabled: true,
+      thresholdMs: 160,
+      maxLeadMs: 320,
+    },
+  };
+  ```
+
+- 页面下方的 `GET /metrics` 可配合服务端缓存观察命中率，前端 `TimelinePlayer` 的实现位于 `js/main.js`。
 
 ## 逐词字幕与 WebVTT
 
