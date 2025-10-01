@@ -45,13 +45,24 @@ const resolveRootDir = () => {
  *     enabled: boolean,
  *     allowAllOrigins: boolean,
  *     whitelist: string[],
- *   }
+ *   },
+ *   limits: {
+ *     maxTextLen: number,
+ *     rateLimitRps: number,
+ *     maxConcurrency: number,
+ *   },
+ *   logDir: string,
  * }} 完整的服务端配置。
  */
 export const loadServerConfig = async () => {
   const rootDir = resolveRootDir();
   const tmpDir = path.resolve(rootDir, process.env.TMP_DIR || './tmp');
   const sampleRate = Number(process.env.MOUTH_SAMPLE_RATE || 80);
+  const logDir = path.resolve(rootDir, process.env.LOG_DIR || './logs');
+
+  const maxTextLen = Number(process.env.MAX_TEXT_LEN || 5000);
+  const rateLimitRps = Number(process.env.RATE_LIMIT_RPS || 5);
+  const maxConcurrency = Number(process.env.MAX_CONCURRENCY || 2);
 
   /**
    * 若设置了自定义 viseme 映射文件，则尝试解析；
@@ -81,6 +92,12 @@ export const loadServerConfig = async () => {
       allowAllOrigins: process.env.CORS_ALLOW_ALL ? process.env.CORS_ALLOW_ALL === 'true' : process.env.NODE_ENV !== 'production',
       whitelist: process.env.CORS_WHITELIST ? process.env.CORS_WHITELIST.split(',').map((item) => item.trim()).filter(Boolean) : [],
     },
+    limits: {
+      maxTextLen: Number.isFinite(maxTextLen) && maxTextLen > 0 ? maxTextLen : 5000,
+      rateLimitRps: Number.isFinite(rateLimitRps) && rateLimitRps > 0 ? rateLimitRps : 5,
+      maxConcurrency: Number.isFinite(maxConcurrency) && maxConcurrency > 0 ? maxConcurrency : 2,
+    },
+    logDir,
   };
 };
 

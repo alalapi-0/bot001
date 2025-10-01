@@ -13,6 +13,7 @@ import {
   resolveServerUrl,
 } from './lipsync.js';
 import { DEFAULT_AUTO_GAIN_CONFIG } from './auto-gain.js';
+import { MouthCapture } from './mouth-capture.js';
 
 /**
  * DOM 引用。
@@ -32,6 +33,8 @@ const providerHint = document.getElementById('provider-hint');
 const renderSelect = /** @type {HTMLSelectElement} */ (document.getElementById('render-mode'));
 const visemeDisplay = document.getElementById('viseme-display');
 const autoGainToggle = /** @type {HTMLInputElement} */ (document.getElementById('auto-gain-toggle'));
+const webcamToggle = /** @type {HTMLInputElement} */ (document.getElementById('webcam-mouth-toggle'));
+const webcamStatus = document.getElementById('webcam-status');
 const wordTimelineBar = /** @type {HTMLDivElement} */ (document.getElementById('word-timeline-bar'));
 const wordTimelineStatus = document.getElementById('word-timeline-status');
 const wordVttInput = /** @type {HTMLTextAreaElement} */ (document.getElementById('word-vtt-input'));
@@ -46,6 +49,7 @@ overlayInfo('stickbot 已就绪，优先使用服务端时间轴驱动。');
 
 // 口型信号
 const mouthSignal = new MouthSignal();
+const mouthCapture = new MouthCapture();
 mouthSignal.subscribe((frame) => {
   avatar.setMouthFrame(frame);
   mouthProgress.value = frame.value;
@@ -68,6 +72,8 @@ let wordHighlightRaf = null;
 let lastActiveWordIndex = -1;
 /** @type {number|null} */
 let wordStatusResetTimer = null;
+/** @type {boolean} */
+let audioDriving = false;
 
 const AUTO_GAIN_STORAGE_KEY = 'stickbot:auto-gain';
 
@@ -97,6 +103,37 @@ const loadAutoGainPreference = () => {
 
 let autoGainPreference = loadAutoGainPreference();
 
+const updateWebcamStatus = (message) => {
+  if (webcamStatus) {
+    webcamStatus.textContent = message;
+  }
+};
+
+const describeWebcamMode = (mode) => {
+  switch (mode) {
+    case 'facemesh':
+      return '已启用摄像头：检测到 faceMesh，使用关键点估计口型。';
+    case 'luma':
+      return '已启用摄像头：未检测到 faceMesh，使用亮度差分占位估计。';
+    default:
+      return '默认关闭，启用后浏览器会请求摄像头权限。';
+  }
+};
+
+updateWebcamStatus(describeWebcamMode('idle'));
+
+mouthCapture.onMouth((value) => {
+  if (!webcamToggle?.checked) {
+    return;
+  }
+  if (audioDriving) {
+    return;
+  }
+  const safe = Math.max(0, Math.min(1, value));
+  const visemeId = safe > 0.75 ? 8 : safe > 0.45 ? 5 : safe > 0.2 ? 2 : 0;
+  mouthSignal.setFrame({ value: safe, visemeId, phoneme: 'webcam' });
+});
+
 const applyAutoGainPreference = (enabled, config) => {
   autoGainPreference = { enabled, config };
   mouthSignal.setAutoGain(enabled, config);
@@ -109,6 +146,29 @@ if (autoGainToggle) {
   });
 } else {
   mouthSignal.setAutoGain(true, autoGainPreference.config);
+}
+
+if (webcamToggle) {
+  webcamToggle.checked = false;
+  webcamToggle.addEventListener('change', async () => {
+    if (webcamToggle.checked) {
+      updateWebcamStatus('正在请求摄像头权限...');
+      webcamToggle.disabled = true;
+      const ok = await mouthCapture.enableWebcam();
+      webcamToggle.disabled = false;
+      if (!ok) {
+        updateWebcamStatus('启用失败，请检查摄像头权限或设备占用情况。');
+        webcamToggle.checked = false;
+        return;
+      }
+      updateWebcamStatus(describeWebcamMode(mouthCapture.mode));
+      overlayInfo('摄像头口型捕捉已开启，可在未播放音频时驱动火柴人。');
+    } else {
+      mouthCapture.disableWebcam();
+      updateWebcamStatus(describeWebcamMode('idle'));
+      overlayInfo('已关闭摄像头口型捕捉。');
+    }
+  });
 }
 
 /** @type {AbortController|null} */
@@ -403,6 +463,7 @@ function stopCurrentPlayback() {
   }
   stopWordHighlight();
   mouthSignal.stop();
+  audioDriving = false;
   overlayInfo('已停止当前播放。');
 }
 
@@ -491,6 +552,7 @@ playButton.addEventListener('click', async () => {
     overlayInfo('请输入要朗读的文本，已播放占位口型。');
     const timeline = generatePlaceholderTimeline('...');
     const startTime = performance.now();
+    audioDriving = true;
     mouthSignal.start();
     mouthSignal.playTimeline(timeline, () => (performance.now() - startTime) / 1000);
     const duration = timeline.length > 0 ? timeline[timeline.length - 1].t : 1;
@@ -500,6 +562,7 @@ playButton.addEventListener('click', async () => {
     placeholderTimer = window.setTimeout(() => {
       placeholderTimer = null;
       mouthSignal.stop();
+      audioDriving = false;
     }, (duration + 0.4) * 1000);
     return;
   }
@@ -533,11 +596,21 @@ playButton.addEventListener('click', async () => {
 
     if (serverResult && Array.isArray(serverResult.mouthTimeline) && serverResult.mouthTimeline.length > 0 && serverResult.audioUrl) {
       overlayInfo('使用服务端时间轴驱动口型。');
-      await playWithTimeline(serverResult);
+      audioDriving = true;
+      try {
+        await playWithTimeline(serverResult);
+      } finally {
+        audioDriving = false;
+      }
     } else if (serverResult && serverResult.audioUrl) {
       overlayInfo('服务端未提供时间轴，改用音量包络分析。');
       stopWordHighlight();
-      await playWithAnalyserUrl(serverResult.audioUrl);
+      audioDriving = true;
+      try {
+        await playWithAnalyserUrl(serverResult.audioUrl);
+      } finally {
+        audioDriving = false;
+      }
     } else if (useWebSpeechCheckbox.checked && 'speechSynthesis' in window) {
       overlayInfo('使用 Web Speech API 作为兜底。');
       stopWordHighlight();
@@ -545,12 +618,18 @@ playButton.addEventListener('click', async () => {
       utterance.lang = /[a-zA-Z]/.test(text) ? 'en-US' : 'zh-CN';
       utterance.rate = speechRate;
       utterance.pitch = parseFloat(pitchSlider.value);
-      await speakWithWebSpeech(utterance, mouthSignal);
+      audioDriving = true;
+      try {
+        await speakWithWebSpeech(utterance, mouthSignal);
+      } finally {
+        audioDriving = false;
+      }
     } else {
       overlayInfo('无法使用服务端或 Web Speech，播放占位时间轴。');
       stopWordHighlight();
       const placeholder = generatePlaceholderTimeline(text);
       const startTime = performance.now();
+      audioDriving = true;
       mouthSignal.start();
       mouthSignal.playTimeline(placeholder, () => (performance.now() - startTime) / 1000);
       const duration = placeholder.length > 0 ? placeholder[placeholder.length - 1].t : 1;
@@ -560,12 +639,14 @@ playButton.addEventListener('click', async () => {
       placeholderTimer = window.setTimeout(() => {
         placeholderTimer = null;
         mouthSignal.stop();
+        audioDriving = false;
       }, (duration + 0.4) * 1000);
     }
   } catch (error) {
     console.error('播放失败：', error);
     overlayInfo(`播放失败：${error instanceof Error ? error.message : String(error)}`);
     mouthSignal.stop();
+    audioDriving = false;
   } finally {
     playButton.disabled = false;
     currentAbort = null;
@@ -582,6 +663,11 @@ stopButton.addEventListener('click', () => {
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     stopCurrentPlayback();
+    if (webcamToggle?.checked) {
+      mouthCapture.disableWebcam();
+      webcamToggle.checked = false;
+      updateWebcamStatus('页面隐藏，已自动关闭摄像头。');
+    }
   }
 });
 

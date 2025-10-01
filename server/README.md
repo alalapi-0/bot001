@@ -26,6 +26,10 @@ npm run dev:server
 | `ESPEAK_VOICE` | `zh` | 默认发音人，可填 `en-US`、`cmn` 等。 |
 | `ESPEAK_RATE` | `170` | 默认语速（WPM），与 `espeak-ng -s` 参数一致。 |
 | `TMP_DIR` | `./tmp` | 运行期临时目录，存放 `.wav` 与 `.pho`。 |
+| `LOG_DIR` | `./logs` | 审计日志目录，每日生成 `<日期>.log`。 |
+| `MAX_TEXT_LEN` | `5000` | 单次合成允许的最大字数，超过即返回 413。 |
+| `RATE_LIMIT_RPS` | `5` | 全局每秒最多允许的合成请求数，超过返回 429。 |
+| `MAX_CONCURRENCY` | `2` | 同时进行的合成任务上限，超过返回 429。 |
 | `MOUTH_SAMPLE_RATE` | `80` | mouth 时间轴采样频率（Hz），建议 60–100。 |
 | `CORS_WHITELIST` | 空 | 生产环境域名白名单，逗号分隔。 |
 | `AZURE_REGION` | 空 | Azure 语音服务区域。 |
@@ -167,6 +171,22 @@ stickbot
 
 该接口仅返回内存中的 WebVTT 文本，不会在临时目录写入音频，可用于导出逐词字幕或在前端直接粘贴。
 
+### `GET /metrics`
+
+返回纯文本指标，便于 Prometheus/脚本抓取：
+
+```
+active_synth=0
+daily_synth_count=12
+avg_synth_seconds=1.238
+tmp_files=3
+```
+
+- `active_synth`：当前正在执行的合成任务数量。
+- `daily_synth_count`：当日成功合成总次数（跨日自动清零）。
+- `avg_synth_seconds`：当日合成耗时均值（壁钟时间，秒）。
+- `tmp_files`：临时目录下文件总数，用于监控清理任务是否正常运行。
+
 ### `GET /audio/:id`
 
 下载运行期生成的 WAV 音频。文件会在 30 分钟后自动清理，可通过 `TMP_FILE_TTL_MS` 自定义过期时间。
@@ -179,6 +199,15 @@ stickbot
 
 - 开发环境默认允许任意来源。若部署到公网，请在 `.env` 中设置 `CORS_ALLOW_ALL=false` 并配置 `CORS_WHITELIST`。
 - 音频文件存放于 `TMP_DIR`，服务端会每隔 5 分钟清理一次过期资源。
+
+## 安全与合规清单
+
+- 已启用 [Helmet](https://helmetjs.github.io/) 设置常见 HTTP 安全响应头。
+- `express.json`/`express.urlencoded` 请求体验证限制为 10KB，防止异常大请求拖垮服务。
+- 通过环境变量控制的 `MAX_TEXT_LEN`、`RATE_LIMIT_RPS` 与 `MAX_CONCURRENCY` 防止滥用与突发并发。
+- `/metrics` 端点暴露活跃合成数、当日次数、平均耗时与临时文件数，便于运行观测。
+- 审计日志写入 `LOG_DIR`，逐条记录 provider、voice、字数、时长、时间轴点数、耗时与错误原因。
+- 定期执行临时目录清理任务，确保敏感音频不过量保留。
 
 ## 与多端协作
 
