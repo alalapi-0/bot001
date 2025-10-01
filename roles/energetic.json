@@ -1,0 +1,16 @@
+{
+  "id": "energetic",
+  "name": "活力型",
+  "description": "高能量动作与暖色主题，适合主持、口播等需要感染力的场景。",
+  "voice": "zh",
+  "preset": {
+    "mouthOpenScale": 1.25,
+    "lipTension": -0.2,
+    "cornerCurve": 0.3,
+    "eyeBlinkBias": 0.15,
+    "headNodAmp": 0.6,
+    "swayAmp": 0.55
+  },
+  "theme": "bright",
+  "renderMode": "vector"
+}

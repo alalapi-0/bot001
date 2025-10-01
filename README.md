@@ -58,6 +58,35 @@ npm run dev
 
 逐词字幕还支持在网页面板粘贴 WebVTT 文本：勾选“使用手动 VTT”即可覆盖服务端结果，便于与外部字幕工具联调。若仅需字幕文本，可直接请求 `GET /tts/vtt`。
 
+## 角色档案
+
+第二轮开始引入 `/roles/*.json` 角色档案，结合表情预设与主题皮肤实现“一键换人格”：
+
+- 服务端会在启动时读取 `roles/` 目录，并暴露 `GET /roles` 与 `GET /roles/:id` 接口；
+- 网页端、微信小程序会拉取该列表，切换时同步更新 voice、渲染模式、主题配色与 `setExpressionOverride`；
+- 档案文件为纯文本 JSON，字段示例如下：
+
+```json
+{
+  "id": "energetic",
+  "name": "活力型",
+  "description": "高能量动作与暖色主题，适合主持、口播等需要感染力的场景。",
+  "voice": "zh",
+  "preset": {
+    "mouthOpenScale": 1.25,
+    "lipTension": -0.2,
+    "cornerCurve": 0.3,
+    "eyeBlinkBias": 0.15,
+    "headNodAmp": 0.6,
+    "swayAmp": 0.55
+  },
+  "theme": "bright",
+  "renderMode": "vector"
+}
+```
+
+可按需增加更多角色（至少保留一个 `default`），修改后无需重启前端即可生效。
+
 ## 架构概览
 
 ```

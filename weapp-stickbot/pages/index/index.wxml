@@ -1,7 +1,15 @@
-<view class="container">
-  <canvas type="2d" canvas-id="avatar" style="width: 320px; height: 420px; background: #ffffff; border-radius: 16px;"></canvas>
+<view class="container {{themeClass}}">
+  <canvas type="2d" canvas-id="avatar" class="avatar-canvas"></canvas>
   <view class="panel">
     <textarea class="text-input" value="{{text}}" placeholder="请输入要朗读的文本" bindinput="onTextInput"></textarea>
+    <view class="selector">
+      <text class="label">角色档案</text>
+      <picker mode="selector" range="{{roleNames}}" value="{{roleIndex}}" bindchange="onRoleChange">
+        <view class="picker-value">{{roleNames[roleIndex]}}</view>
+      </picker>
+      <text class="role-description">{{roleDescription}}</text>
+      <text class="role-meta">{{roleMeta}}</text>
+    </view>
     <view class="selector">
       <text class="label">TTS 供应器</text>
       <picker mode="selector" range="{{providers}}" value="{{providerIndex}}" bindchange="onProviderChange">

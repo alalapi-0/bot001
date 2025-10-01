@@ -1,0 +1,16 @@
+{
+  "id": "soft",
+  "name": "轻柔型",
+  "description": "嘴角更放松、眨眼更频繁，并配合柔和的浅色主题，适合阅读与陪伴类场景。",
+  "voice": "en-US",
+  "preset": {
+    "mouthOpenScale": 0.85,
+    "lipTension": 0.25,
+    "cornerCurve": -0.1,
+    "eyeBlinkBias": -0.2,
+    "headNodAmp": 0.15,
+    "swayAmp": 0.18
+  },
+  "theme": "pastel",
+  "renderMode": "vector"
+}

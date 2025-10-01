@@ -10,6 +10,104 @@ const RENDER_MODES = ['Vector', 'Sprite'];
 const PROVIDER_LABELS = ['espeak', 'azure'];
 const TIMER_INTERVAL = 66; // 约 15 FPS，对应 60~80Hz 插值节奏
 const AUTO_GAIN_STORAGE_KEY = 'stickbot:auto-gain';
+const ROLE_STORAGE_KEY = 'stickbot:role-profile';
+
+const DEFAULT_ROLE = {
+  id: 'default',
+  name: '基础款',
+  description: '默认表情与经典主题，适合大多数演示场景。',
+  voice: 'zh',
+  preset: {
+    mouthOpenScale: 1,
+    lipTension: 0,
+    cornerCurve: 0.05,
+    eyeBlinkBias: 0,
+    headNodAmp: 0.2,
+    swayAmp: 0.25,
+  },
+  theme: 'classic',
+  renderMode: 'vector',
+};
+
+const DEFAULT_EXPRESSION = {
+  mouthOpenScale: 1,
+  lipTension: 0,
+  cornerCurve: 0,
+  eyeBlinkBias: 0,
+  headNodAmp: 0.2,
+  swayAmp: 0.25,
+};
+
+const THEME_CLASS_MAP = {
+  classic: 'theme-classic',
+  bright: 'theme-bright',
+  pastel: 'theme-pastel',
+  noir: 'theme-noir',
+};
+
+/**
+ * 对数值进行夹紧。
+ * @param {number} value - 原始值。
+ * @param {number} min - 最小值。
+ * @param {number} max - 最大值。
+ * @returns {number} 夹紧后的结果。
+ */
+function clamp(value, min, max) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return min;
+  }
+  return Math.min(max, Math.max(min, num));
+}
+
+/**
+ * 规范化角色档案。
+ * @param {any} role - 原始角色对象。
+ * @param {string} fallbackId - 回退 ID。
+ * @returns {{ id: string, name: string, description: string, voice: string, preset: Record<string, number>, theme: string, renderMode: string }} 规范化结果。
+ */
+function sanitizeRole(role, fallbackId) {
+  const id = typeof role?.id === 'string' && role.id.trim() ? role.id.trim() : fallbackId;
+  const preset = role && typeof role.preset === 'object' && role.preset ? role.preset : {};
+  return {
+    id,
+    name: typeof role?.name === 'string' && role.name.trim() ? role.name.trim() : id,
+    description: typeof role?.description === 'string' ? role.description : '',
+    voice: typeof role?.voice === 'string' && role.voice ? role.voice : '',
+    preset,
+    theme: typeof role?.theme === 'string' && role.theme ? role.theme : 'classic',
+    renderMode: typeof role?.renderMode === 'string' && role.renderMode ? role.renderMode : 'vector',
+  };
+}
+
+/**
+ * 构建角色元信息展示文案。
+ * @param {{ voice?: string, renderMode?: string, theme?: string }} role - 角色档案。
+ * @returns {string} 展示文本。
+ */
+function buildRoleMeta(role) {
+  const parts = [];
+  if (role?.voice) {
+    parts.push(`voice: ${role.voice}`);
+  }
+  if (role?.renderMode) {
+    parts.push(`渲染: ${role.renderMode}`);
+  }
+  if (role?.theme) {
+    parts.push(`主题: ${role.theme}`);
+  }
+  return parts.join(' · ');
+}
+
+/**
+ * 根据主题标识返回小程序容器类名。
+ * @param {string} theme - 主题 ID。
+ * @returns {string} 类名。
+ */
+function resolveThemeClass(theme) {
+  const key = typeof theme === 'string' && theme ? theme : 'classic';
+  return THEME_CLASS_MAP[key] || THEME_CLASS_MAP.classic;
+}
 
 /**
  * 线性插值 mouth 时间轴。
@@ -111,6 +209,11 @@ Page({
     spriteBasePath: '/assets/mouth',
     autoGainEnabled: true,
     currentWord: '',
+    roleNames: [DEFAULT_ROLE.name],
+    roleIndex: 0,
+    themeClass: resolveThemeClass(DEFAULT_ROLE.theme),
+    roleDescription: DEFAULT_ROLE.description,
+    roleMeta: buildRoleMeta(DEFAULT_ROLE),
   },
   /**
    * 生命周期函数：初始化画布、音频与服务端信息。
@@ -127,6 +230,9 @@ Page({
     this.autoGainProcessor = null;
     this.wordTimeline = [];
     this.wordIndex = -1;
+    this.roles = [];
+    this.activeRole = sanitizeRole(DEFAULT_ROLE, 'default');
+    this.expressionPreset = { ...DEFAULT_EXPRESSION };
 
     this.innerAudio = wx.createInnerAudioContext();
     this.innerAudio.obeyMuteSwitch = false;
@@ -148,6 +254,14 @@ Page({
 
     this.drawAvatar();
     this.fetchProviders();
+
+    let storedRoleId = '';
+    try {
+      storedRoleId = wx.getStorageSync(ROLE_STORAGE_KEY) || '';
+    } catch (error) {
+      console.warn('读取角色档案失败', error);
+    }
+    this.fetchRoles(storedRoleId);
 
     const stored = wx.getStorageSync(AUTO_GAIN_STORAGE_KEY);
     if (stored && typeof stored === 'object' && typeof stored.enabled === 'boolean') {
@@ -171,6 +285,19 @@ Page({
     this.setData({ text: event.detail.value });
   },
   /**
+   * 切换角色档案。
+   * @param {WechatMiniprogram.PickerChange} event - 选择事件。
+   */
+  onRoleChange(event) {
+    const index = Number(event.detail.value);
+    const safeIndex = Number.isFinite(index) ? index : 0;
+    this.setData({ roleIndex: safeIndex });
+    const role = Array.isArray(this.roles) ? this.roles[safeIndex] : null;
+    if (role) {
+      this.applyRole(role);
+    }
+  },
+  /**
    * 切换 TTS 供应器。
    * @param {WechatMiniprogram.PickerChange} event - 选择事件。
    */
@@ -182,7 +309,14 @@ Page({
    * @param {WechatMiniprogram.PickerChange} event - 选择事件。
    */
   onRenderModeChange(event) {
-    this.setData({ renderModeIndex: Number(event.detail.value) });
+    const index = Number(event.detail.value);
+    this.setData({ renderModeIndex: index });
+    if (this.activeRole) {
+      const modes = this.data.renderModes || [];
+      const modeValue = modes[index] ? String(modes[index]).toLowerCase() : 'vector';
+      this.activeRole.renderMode = modeValue;
+      this.setData({ roleMeta: buildRoleMeta(this.activeRole) });
+    }
     this.drawAvatar();
   },
   /**
@@ -247,6 +381,109 @@ Page({
     }
   },
   /**
+   * 拉取角色档案列表。
+   * @param {string} storedRoleId - 本地存储的角色 ID。
+   */
+  fetchRoles(storedRoleId = '') {
+    const origin = this.getServerOrigin();
+    wx.request({
+      url: `${origin}/roles`,
+      method: 'GET',
+      success: (res) => {
+        let list = [];
+        if (Array.isArray(res.data?.roles)) {
+          list = res.data.roles;
+        } else if (Array.isArray(res.data)) {
+          list = res.data;
+        }
+        if (!Array.isArray(list) || list.length === 0) {
+          list = [DEFAULT_ROLE];
+        }
+        this.roles = list.map((item, index) => sanitizeRole(item, `role-${index}`));
+        if (!this.roles || this.roles.length === 0) {
+          this.roles = [sanitizeRole(DEFAULT_ROLE, 'default')];
+        }
+        const roleNames = this.roles.map((item) => item.name || item.id);
+        let roleIndex = 0;
+        if (storedRoleId) {
+          const found = this.roles.findIndex((item) => item.id === storedRoleId);
+          if (found >= 0) {
+            roleIndex = found;
+          }
+        }
+        this.setData({ roleNames, roleIndex });
+        const target = this.roles[roleIndex] || this.roles[0];
+        if (target) {
+          this.applyRole(target, { persist: false });
+        }
+      },
+      fail: (error) => {
+        console.warn('获取角色失败', error);
+        if (!this.roles || this.roles.length === 0) {
+          this.roles = [sanitizeRole(DEFAULT_ROLE, 'default')];
+          this.setData({
+            roleNames: this.roles.map((item) => item.name || item.id),
+            roleIndex: 0,
+          });
+          this.applyRole(this.roles[0], { persist: false });
+        }
+      },
+    });
+  },
+  /**
+   * 应用角色设置并刷新 UI。
+   * @param {ReturnType<typeof sanitizeRole>} role - 角色档案。
+   * @param {{ persist?: boolean }} [options] - 控制是否写入本地缓存。
+   */
+  applyRole(role, options = {}) {
+    if (!role) {
+      return;
+    }
+    const persist = options.persist !== false;
+    const sanitized = sanitizeRole(role, role.id || 'role');
+    sanitized.renderMode = String(sanitized.renderMode || 'vector').toLowerCase();
+    sanitized.theme = String(sanitized.theme || 'classic');
+    this.activeRole = sanitized;
+    this.expressionPreset = {
+      ...DEFAULT_EXPRESSION,
+      ...(sanitized.preset || {}),
+    };
+    const themeClass = resolveThemeClass(sanitized.theme);
+    const renderModeIndex = this.getRenderModeIndex(sanitized.renderMode);
+    this.setData({
+      themeClass,
+      renderModeIndex,
+      roleDescription: sanitized.description || DEFAULT_ROLE.description,
+      roleMeta: buildRoleMeta(sanitized),
+    });
+    this.drawAvatar();
+    if (persist) {
+      try {
+        wx.setStorageSync(ROLE_STORAGE_KEY, sanitized.id);
+      } catch (error) {
+        console.warn('保存角色失败', error);
+      }
+    }
+  },
+  /**
+   * 根据渲染模式字符串返回下拉框索引。
+   * @param {string} mode - 渲染模式。
+   * @returns {number} 下标。
+   */
+  getRenderModeIndex(mode) {
+    const target = String(mode || '').toLowerCase();
+    const modes = this.data.renderModes || [];
+    const index = modes.findIndex((item) => String(item).toLowerCase() === target);
+    return index >= 0 ? index : 0;
+  },
+  /**
+   * 获取当前表情预设。
+   * @returns {{ mouthOpenScale: number, lipTension: number, cornerCurve: number, eyeBlinkBias: number, headNodAmp: number, swayAmp: number }} 表情参数。
+   */
+  getExpression() {
+    return this.expressionPreset || DEFAULT_EXPRESSION;
+  },
+  /**
    * 调用服务端 `/tts`。
    * @param {string} text - 待合成文本。
    * @returns {Promise<{ audioUrl: string, mouthTimeline: { t: number, v: number, visemeId: number }[] }>} 结果。
@@ -254,14 +491,18 @@ Page({
   requestTts(text) {
     const provider = this.data.providers[this.data.providerIndex];
     const origin = this.getServerOrigin();
+    const payload = {
+      text,
+      provider,
+    };
+    if (this.activeRole?.voice) {
+      payload.voice = this.activeRole.voice;
+    }
     return new Promise((resolve, reject) => {
       wx.request({
         url: `${origin}/tts`,
         method: 'GET',
-        data: {
-          text,
-          provider,
-        },
+        data: payload,
         success: (res) => {
           if (res.statusCode >= 200 && res.statusCode < 300) {
             resolve(res.data);
@@ -406,8 +647,10 @@ Page({
    */
   drawBody(ctx) {
     const time = Date.now() / 1000;
-    const swing = Math.sin(time * 1.5) * 0.22;
-    const jitter = (Math.random() - 0.5) * 0.05 * (0.2 + this.data.mouth);
+    const expression = this.getExpression();
+    const swayFactor = clamp(1 + (expression.swayAmp ?? 0) * 0.8, 0.5, 2);
+    const swing = Math.sin(time * 1.5 * clamp(1 + (expression.swayAmp ?? 0) * 0.3, 0.5, 2)) * 0.22 * swayFactor;
+    const jitter = (Math.random() - 0.5) * 0.05 * (0.2 + this.data.mouth) * clamp(1 + (expression.headNodAmp ?? 0) * 0.6, 0.6, 1.8);
     ctx.setStrokeStyle('#1f2937');
     ctx.setLineWidth(6);
 
@@ -437,12 +680,16 @@ Page({
    * @param {number} visemeId - 口型编号。
    */
   drawVectorHead(ctx, mouth, visemeId) {
-    const headY = -150 - mouth * 8;
+    const expression = this.getExpression();
+    const nodOffset = Math.sin(Date.now() / 1000 * 1.6) * (expression.headNodAmp ?? 0) * 14;
+    const headY = -150 - mouth * 8 + nodOffset;
     const headRadius = 48;
     const mouthWidthBase = 70;
-    const mouthHeight = 8 + mouth * 48;
+    const mouthScale = clamp(expression.mouthOpenScale ?? 1, 0.5, 2.5);
+    const mouthHeight = (8 + mouth * 48) * mouthScale;
     const rounded = Math.round(visemeId) === 9;
-    const widthFactor = rounded ? 0.65 : 1;
+    const tensionFactor = clamp(1 - (expression.lipTension ?? 0) * 0.35, 0.6, 1.4);
+    const widthFactor = (rounded ? 0.65 : 1) * tensionFactor;
 
     ctx.setLineWidth(5);
     ctx.setStrokeStyle('#111827');
@@ -453,7 +700,9 @@ Page({
     ctx.stroke();
 
     const eyeGap = 20;
-    const eyeHeight = Math.max(2, 10 * (1 - Math.min(1, mouth * 1.4)));
+    const blinkBase = clamp(1 - Math.min(1, mouth * 1.4), 0, 1);
+    const blinkAdjusted = clamp(blinkBase + (expression.eyeBlinkBias ?? 0) * 0.5, 0, 1);
+    const eyeHeight = Math.max(2, 10 * blinkAdjusted);
     ctx.setLineWidth(4);
     ctx.beginPath();
     ctx.moveTo(-eyeGap, headY - 12);
@@ -463,9 +712,10 @@ Page({
     ctx.stroke();
 
     const mouthWidth = mouthWidthBase * widthFactor;
-    const lipTopY = headY + 18;
-    const lipBottomY = lipTopY + mouthHeight;
-    const controlOffset = mouthHeight * 0.7;
+    const cornerCurve = expression.cornerCurve ?? 0;
+    const lipTopY = headY + 18 - cornerCurve * 10;
+    const lipBottomY = lipTopY + mouthHeight + cornerCurve * 16;
+    const controlOffset = mouthHeight * 0.7 * (1 + cornerCurve * 0.4);
 
     ctx.setLineWidth(6);
     ctx.setStrokeStyle('#ef4444');
@@ -514,11 +764,13 @@ Page({
    * @param {number} visemeId - 口型编号。
    */
   drawSpriteHead(ctx, mouth, visemeId) {
+    const expression = this.getExpression();
+    const nodOffset = Math.sin(Date.now() / 1000 * 1.6) * (expression.headNodAmp ?? 0) * 14;
     const key = Math.round(visemeId);
     const cached = this.spriteCache[key];
     if (cached) {
-      const headY = -180;
-      const scale = 1 + mouth * 0.1;
+      const headY = -180 + nodOffset;
+      const scale = 1 + mouth * 0.1 * clamp(expression.mouthOpenScale ?? 1, 0.5, 2.5);
       const width = cached.width * scale;
       const height = cached.height * scale;
       ctx.drawImage(cached.path, -width / 2, headY - height / 2, width, height);

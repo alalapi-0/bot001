@@ -5,14 +5,37 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>stickbot 火柴人语音演示</title>
     <style>
-      /* 页面整体布局，左侧画布右侧控制面板 */
+      :root {
+        color-scheme: light dark;
+        --page-bg: #f5f5f5;
+        --page-text: #1f2937;
+        --card-bg: #ffffff;
+        --card-text: #1f2937;
+        --card-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+        --card-border: rgba(17, 24, 39, 0.08);
+        --accent-bg: #4f46e5;
+        --accent-text: #ffffff;
+        --secondary-bg: #e5e7eb;
+        --secondary-text: #1f2937;
+        --hint-text: #6b7280;
+        --timeline-bg: #f9fafb;
+        --timeline-border: #e5e7eb;
+        --input-border: #d1d5db;
+        --chip-bg: rgba(79, 70, 229, 0.08);
+        --chip-text: #4338ca;
+        --chip-active-bg: #4f46e5;
+        --chip-active-text: #ffffff;
+        --chip-active-shadow: 0 6px 16px rgba(79, 70, 229, 0.35);
+      }
+
       body {
         margin: 0;
         font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        background: #f5f5f5;
-        color: #222;
+        background: var(--page-bg);
+        color: var(--page-text);
         display: flex;
         min-height: 100vh;
+        transition: background 0.3s ease, color 0.3s ease;
       }
 
       main {
@@ -24,20 +47,21 @@
       }
 
       canvas {
-        background: #fff;
+        background: var(--card-bg);
         border-radius: 12px;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+        box-shadow: var(--card-shadow);
       }
 
       .controls {
         width: 320px;
-        background: #fff;
+        background: var(--card-bg);
         border-radius: 12px;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+        box-shadow: var(--card-shadow);
         padding: 20px;
         display: flex;
         flex-direction: column;
         gap: 16px;
+        color: var(--card-text);
       }
 
       textarea {
@@ -45,9 +69,11 @@
         height: 160px;
         padding: 12px;
         font-size: 14px;
-        border: 1px solid #ccc;
+        border: 1px solid var(--input-border);
         border-radius: 8px;
         resize: vertical;
+        background: var(--card-bg);
+        color: var(--card-text);
       }
 
       label {
@@ -55,6 +81,7 @@
         align-items: center;
         gap: 8px;
         font-size: 14px;
+        color: var(--card-text);
       }
 
       button {
@@ -67,13 +94,13 @@
       }
 
       button.primary {
-        background: #4f46e5;
-        color: #fff;
+        background: var(--accent-bg);
+        color: var(--accent-text);
       }
 
       button.secondary {
-        background: #e5e7eb;
-        color: #1f2937;
+        background: var(--secondary-bg);
+        color: var(--secondary-text);
       }
 
       button:active {
@@ -92,9 +119,30 @@
         gap: 6px;
       }
 
+      .selector-group select {
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid var(--input-border);
+        background: var(--card-bg);
+        color: var(--card-text);
+      }
+
+      .role-description {
+        margin: 0;
+        font-size: 13px;
+        color: var(--hint-text);
+        line-height: 1.4;
+      }
+
+      .role-meta {
+        margin: 0;
+        font-size: 12px;
+        color: var(--hint-text);
+      }
+
       .word-timeline {
-        border: 1px solid #e5e7eb;
-        background: #f9fafb;
+        border: 1px solid var(--timeline-border);
+        background: var(--timeline-bg);
         border-radius: 10px;
         padding: 12px;
         display: flex;
@@ -107,7 +155,7 @@
         align-items: center;
         justify-content: space-between;
         font-size: 13px;
-        color: #111827;
+        color: var(--card-text);
       }
 
       .word-timeline-header label {
@@ -115,7 +163,7 @@
         align-items: center;
         gap: 6px;
         font-size: 12px;
-        color: #4b5563;
+        color: var(--hint-text);
       }
 
       .word-timeline-bar {
@@ -124,24 +172,24 @@
         flex-wrap: wrap;
         gap: 6px;
         padding: 8px;
-        background: #ffffff;
+        background: var(--card-bg);
         border-radius: 8px;
-        border: 1px solid #e5e7eb;
+        border: 1px solid var(--timeline-border);
       }
 
       .word-chip {
         padding: 4px 6px;
         border-radius: 6px;
-        background: rgba(79, 70, 229, 0.08);
-        color: #4338ca;
+        background: var(--chip-bg);
+        color: var(--chip-text);
         font-size: 13px;
         transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
       }
 
       .word-chip.active {
-        background: #4f46e5;
-        color: #ffffff;
-        box-shadow: 0 6px 16px rgba(79, 70, 229, 0.35);
+        background: var(--chip-active-bg);
+        color: var(--chip-active-text);
+        box-shadow: var(--chip-active-shadow);
       }
 
       .word-timeline textarea {
@@ -149,11 +197,13 @@
         height: 96px;
         resize: vertical;
         border-radius: 8px;
-        border: 1px solid #d1d5db;
+        border: 1px solid var(--input-border);
         padding: 8px;
         font-size: 13px;
         font-family: ui-monospace, SFMono-Regular, SFMono, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
         box-sizing: border-box;
+        background: var(--card-bg);
+        color: var(--card-text);
       }
 
       .word-timeline-actions {
@@ -164,7 +214,7 @@
 
       .word-timeline-status {
         font-size: 12px;
-        color: #6b7280;
+        color: var(--hint-text);
       }
 
       .progress-container {
@@ -183,16 +233,110 @@
         bottom: 12px;
         right: 24px;
         font-size: 12px;
-        color: #666;
+        color: var(--hint-text);
+      }
+
+      body.theme-classic {
+        --page-bg: #f5f5f5;
+        --page-text: #1f2937;
+        --card-bg: #ffffff;
+        --card-text: #1f2937;
+        --card-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+        --card-border: rgba(17, 24, 39, 0.08);
+        --accent-bg: #4f46e5;
+        --accent-text: #ffffff;
+        --secondary-bg: #e5e7eb;
+        --secondary-text: #1f2937;
+        --hint-text: #6b7280;
+        --timeline-bg: #f9fafb;
+        --timeline-border: #e5e7eb;
+        --input-border: #d1d5db;
+        --chip-bg: rgba(79, 70, 229, 0.08);
+        --chip-text: #4338ca;
+        --chip-active-bg: #4f46e5;
+        --chip-active-text: #ffffff;
+        --chip-active-shadow: 0 6px 16px rgba(79, 70, 229, 0.35);
+      }
+
+      body.theme-bright {
+        --page-bg: #fff7ed;
+        --page-text: #7c2d12;
+        --card-bg: #fffaf0;
+        --card-text: #7c2d12;
+        --card-shadow: 0 12px 36px rgba(124, 45, 18, 0.1);
+        --card-border: rgba(249, 115, 22, 0.18);
+        --accent-bg: #f97316;
+        --accent-text: #ffffff;
+        --secondary-bg: #fed7aa;
+        --secondary-text: #7c2d12;
+        --hint-text: #b45309;
+        --timeline-bg: #fffbeb;
+        --timeline-border: rgba(251, 191, 36, 0.45);
+        --input-border: rgba(251, 146, 60, 0.45);
+        --chip-bg: rgba(249, 115, 22, 0.12);
+        --chip-text: #c2410c;
+        --chip-active-bg: #ea580c;
+        --chip-active-text: #fff7ed;
+        --chip-active-shadow: 0 6px 16px rgba(234, 88, 12, 0.28);
+      }
+
+      body.theme-noir {
+        --page-bg: #0f172a;
+        --page-text: #e2e8f0;
+        --card-bg: #1e293b;
+        --card-text: #e2e8f0;
+        --card-shadow: 0 18px 40px rgba(15, 23, 42, 0.65);
+        --card-border: rgba(148, 163, 184, 0.22);
+        --accent-bg: #38bdf8;
+        --accent-text: #0f172a;
+        --secondary-bg: #334155;
+        --secondary-text: #e2e8f0;
+        --hint-text: #94a3b8;
+        --timeline-bg: rgba(30, 41, 59, 0.9);
+        --timeline-border: rgba(148, 163, 184, 0.35);
+        --input-border: rgba(148, 163, 184, 0.45);
+        --chip-bg: rgba(56, 189, 248, 0.14);
+        --chip-text: #bae6fd;
+        --chip-active-bg: #0ea5e9;
+        --chip-active-text: #0f172a;
+        --chip-active-shadow: 0 8px 22px rgba(14, 165, 233, 0.38);
+      }
+
+      body.theme-pastel {
+        --page-bg: #f3e8ff;
+        --page-text: #4c1d95;
+        --card-bg: #fdf4ff;
+        --card-text: #4c1d95;
+        --card-shadow: 0 12px 32px rgba(76, 29, 149, 0.12);
+        --card-border: rgba(192, 132, 252, 0.35);
+        --accent-bg: #a855f7;
+        --accent-text: #fdf4ff;
+        --secondary-bg: #e9d5ff;
+        --secondary-text: #4c1d95;
+        --hint-text: #7c3aed;
+        --timeline-bg: rgba(253, 244, 255, 0.88);
+        --timeline-border: rgba(192, 132, 252, 0.4);
+        --input-border: rgba(167, 85, 247, 0.4);
+        --chip-bg: rgba(167, 85, 247, 0.14);
+        --chip-text: #6d28d9;
+        --chip-active-bg: #9333ea;
+        --chip-active-text: #fdf4ff;
+        --chip-active-shadow: 0 6px 18px rgba(147, 51, 234, 0.32);
       }
     </style>
   </head>
-  <body>
+  <body class="theme-classic">
     <main>
       <canvas id="stickbot-canvas" width="480" height="480"></canvas>
       <section class="controls">
         <h1 style="margin: 0">stickbot 控制面板</h1>
         <textarea id="speech-text" placeholder="请输入要朗读的文本">你好，我是 stickbot。今天我们一起练习口型同步！</textarea>
+        <div class="selector-group">
+          <label for="role-select">角色档案</label>
+          <select id="role-select"></select>
+          <p class="role-description" id="role-description">选择不同角色，stickbot 将切换 voice、表情预设与主题皮肤。</p>
+          <p class="role-meta" id="role-meta"></p>
+        </div>
         <div class="selector-group">
           <label for="tts-provider">TTS 供应器</label>
           <select id="tts-provider">

@@ -31,6 +31,10 @@ const mouthProgress = /** @type {HTMLProgressElement} */ (document.getElementByI
 const providerSelect = /** @type {HTMLSelectElement} */ (document.getElementById('tts-provider'));
 const providerHint = document.getElementById('provider-hint');
 const renderSelect = /** @type {HTMLSelectElement} */ (document.getElementById('render-mode'));
+const roleSelect = /** @type {HTMLSelectElement} */ (document.getElementById('role-select'));
+const roleDescription = document.getElementById('role-description');
+const roleMeta = document.getElementById('role-meta');
+const defaultRoleDescription = roleDescription?.textContent || '';
 const visemeDisplay = document.getElementById('viseme-display');
 const autoGainToggle = /** @type {HTMLInputElement} */ (document.getElementById('auto-gain-toggle'));
 const webcamToggle = /** @type {HTMLInputElement} */ (document.getElementById('webcam-mouth-toggle'));
@@ -76,6 +80,234 @@ let wordStatusResetTimer = null;
 let audioDriving = false;
 
 const AUTO_GAIN_STORAGE_KEY = 'stickbot:auto-gain';
+const ROLE_STORAGE_KEY = 'stickbot:active-role';
+
+/**
+ * @typedef {Object} RoleProfile
+ * @property {string} id - 角色唯一标识。
+ * @property {string} [name] - 展示名称。
+ * @property {string} [description] - 角色简介。
+ * @property {string} [voice] - 默认语音 ID。
+ * @property {Record<string, number>} [preset] - 表情预设。
+ * @property {string} [theme] - 主题皮肤标识。
+ * @property {string} [renderMode] - 默认渲染模式。
+ */
+
+const DEFAULT_ROLE = {
+  id: 'default',
+  name: '基础款',
+  description: '默认表情与经典主题，适合大多数演示场景。',
+  voice: 'zh',
+  preset: {
+    mouthOpenScale: 1,
+    lipTension: 0,
+    cornerCurve: 0.05,
+    eyeBlinkBias: 0,
+    headNodAmp: 0.2,
+    swayAmp: 0.25,
+  },
+  theme: 'classic',
+  renderMode: 'vector',
+};
+
+const hostStickBot = /** @type {HTMLElement & { setExpressionOverride?: (preset: Record<string, number>) => void, setTheme?: (theme: string) => void, setRenderMode?: (mode: string) => void }} */ (
+  document.querySelector('stick-bot')
+);
+
+/** @type {RoleProfile[]} */
+let availableRoles = [];
+/** @type {RoleProfile|null} */
+let activeRole = null;
+
+const sanitizeRole = (role, fallbackId) => {
+  const id = typeof role?.id === 'string' && role.id.trim() ? role.id.trim() : fallbackId;
+  const preset = role && typeof role.preset === 'object' && role.preset ? role.preset : {};
+  const renderMode = typeof role?.renderMode === 'string' && role.renderMode ? role.renderMode : 'vector';
+  const theme = typeof role?.theme === 'string' && role.theme ? role.theme : 'classic';
+  return {
+    id,
+    name: typeof role?.name === 'string' && role.name.trim() ? role.name.trim() : id,
+    description: typeof role?.description === 'string' ? role.description : '',
+    voice: typeof role?.voice === 'string' && role.voice ? role.voice : '',
+    preset,
+    theme: theme.toLowerCase(),
+    renderMode: renderMode.toLowerCase(),
+  };
+};
+
+const buildRoleMeta = (role) => {
+  const parts = [];
+  if (role?.voice) {
+    parts.push(`voice: ${role.voice}`);
+  }
+  if (role?.renderMode) {
+    parts.push(`渲染: ${role.renderMode}`);
+  }
+  if (role?.theme) {
+    parts.push(`主题: ${role.theme}`);
+  }
+  return parts.join(' · ');
+};
+
+const applyTheme = (themeId) => {
+  const body = document.body;
+  if (!body) {
+    return;
+  }
+  const target = themeId ? `theme-${themeId}` : 'theme-classic';
+  body.classList.forEach((cls) => {
+    if (cls.startsWith('theme-') && cls !== target) {
+      body.classList.remove(cls);
+    }
+  });
+  if (!body.classList.contains(target)) {
+    body.classList.add(target);
+  }
+  if (hostStickBot && typeof hostStickBot.setTheme === 'function') {
+    hostStickBot.setTheme(themeId);
+  }
+};
+
+const applyExpressionPreset = (preset) => {
+  const expression = preset && typeof preset === 'object' ? preset : {};
+  if (hostStickBot && typeof hostStickBot.setExpressionOverride === 'function') {
+    hostStickBot.setExpressionOverride(expression);
+  }
+  if (typeof avatar.setExpressionOverride === 'function') {
+    avatar.setExpressionOverride(expression);
+  }
+};
+
+const loadStoredRoleId = () => {
+  try {
+    return window.localStorage?.getItem(ROLE_STORAGE_KEY) || '';
+  } catch (error) {
+    console.warn('[stickbot] 读取角色档案失败', error);
+    return '';
+  }
+};
+
+const saveActiveRoleId = (roleId) => {
+  try {
+    window.localStorage?.setItem(ROLE_STORAGE_KEY, roleId);
+  } catch (error) {
+    console.warn('[stickbot] 保存角色档案失败', error);
+  }
+};
+
+const populateRoleSelect = () => {
+  if (!roleSelect) {
+    return;
+  }
+  roleSelect.innerHTML = '';
+  for (const role of availableRoles) {
+    const option = document.createElement('option');
+    option.value = role.id;
+    option.textContent = role.name || role.id;
+    roleSelect.appendChild(option);
+  }
+  roleSelect.disabled = availableRoles.length === 0;
+};
+
+const updateRoleDisplay = (role) => {
+  if (roleDescription) {
+    const text = role?.description && role.description.trim() ? role.description : defaultRoleDescription;
+    roleDescription.textContent = text;
+  }
+  if (roleMeta) {
+    roleMeta.textContent = buildRoleMeta(role || null);
+  }
+};
+
+const applyRole = async (role, options = {}) => {
+  if (!role) {
+    return;
+  }
+  const persist = options.persist !== false;
+  const sanitized = sanitizeRole(role, role.id || 'role');
+  activeRole = { ...sanitized };
+
+  if (roleSelect) {
+    roleSelect.disabled = false;
+    roleSelect.value = activeRole.id;
+  }
+
+  applyExpressionPreset(activeRole.preset);
+  applyTheme(activeRole.theme);
+  updateRoleDisplay(activeRole);
+
+  if (renderSelect) {
+    renderSelect.value = activeRole.renderMode;
+  }
+
+  if (hostStickBot && typeof hostStickBot.setRenderMode === 'function') {
+    hostStickBot.setRenderMode(activeRole.renderMode);
+  }
+
+  if (typeof avatar.setRenderMode === 'function') {
+    const ok = await avatar.setRenderMode(activeRole.renderMode);
+    if (!ok) {
+      overlayInfo('未检测到 Sprite 资源，已回退至 Vector 模式。');
+      activeRole.renderMode = 'vector';
+      if (renderSelect) {
+        renderSelect.value = 'vector';
+      }
+      await avatar.setRenderMode('vector');
+      if (hostStickBot && typeof hostStickBot.setRenderMode === 'function') {
+        hostStickBot.setRenderMode('vector');
+      }
+      updateRoleDisplay(activeRole);
+    }
+  }
+
+  if (persist) {
+    saveActiveRoleId(activeRole.id);
+  }
+
+  overlayInfo(`已切换到角色「${activeRole.name || activeRole.id}」。`);
+};
+
+const loadRoles = async () => {
+  if (roleSelect) {
+    roleSelect.disabled = true;
+  }
+  /** @type {RoleProfile[]} */
+  let roles = [];
+  try {
+    const response = await fetch(resolveServerUrl('/roles'));
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const payload = await response.json();
+    if (Array.isArray(payload?.roles)) {
+      roles = payload.roles;
+    } else if (Array.isArray(payload)) {
+      roles = payload;
+    }
+  } catch (error) {
+    console.warn('[stickbot] 加载角色档案失败', error);
+  }
+
+  if (!Array.isArray(roles) || roles.length === 0) {
+    roles = [DEFAULT_ROLE];
+  }
+
+  availableRoles = roles.map((role, index) => sanitizeRole(role, `role-${index}`));
+  if (availableRoles.length === 0) {
+    availableRoles = [sanitizeRole(DEFAULT_ROLE, 'default')];
+  }
+  populateRoleSelect();
+
+  const storedId = loadStoredRoleId();
+  let initialRole = availableRoles[0];
+  if (storedId) {
+    const storedRole = availableRoles.find((item) => item.id === storedId);
+    if (storedRole) {
+      initialRole = storedRole;
+    }
+  }
+  await applyRole(initialRole, { persist: false });
+};
 
 const loadAutoGainPreference = () => {
   if (!autoGainToggle) {
@@ -167,6 +399,16 @@ if (webcamToggle) {
       mouthCapture.disableWebcam();
       updateWebcamStatus(describeWebcamMode('idle'));
       overlayInfo('已关闭摄像头口型捕捉。');
+    }
+  });
+}
+
+if (roleSelect) {
+  roleSelect.disabled = true;
+  roleSelect.addEventListener('change', async () => {
+    const selected = availableRoles.find((item) => item.id === roleSelect.value);
+    if (selected) {
+      await applyRole(selected);
     }
   });
 }
@@ -538,8 +780,22 @@ renderSelect.addEventListener('change', async () => {
   if (!ok) {
     overlayInfo('未检测到 Sprite 资源，已回退至 Vector 模式。');
     renderSelect.value = 'vector';
+    if (hostStickBot && typeof hostStickBot.setRenderMode === 'function') {
+      hostStickBot.setRenderMode('vector');
+    }
+    if (activeRole) {
+      activeRole.renderMode = 'vector';
+      updateRoleDisplay(activeRole);
+    }
   } else {
     overlayInfo(`已切换至 ${mode} 渲染模式。`);
+    if (hostStickBot && typeof hostStickBot.setRenderMode === 'function') {
+      hostStickBot.setRenderMode(mode);
+    }
+    if (activeRole) {
+      activeRole.renderMode = mode;
+      updateRoleDisplay(activeRole);
+    }
   }
 });
 
@@ -582,6 +838,7 @@ playButton.addEventListener('click', async () => {
       serverResult = await requestServerTts(text, {
         provider,
         rate: espeakRate,
+        voice: activeRole?.voice,
         abortSignal: currentAbort.signal,
       });
     } catch (error) {
@@ -615,7 +872,13 @@ playButton.addEventListener('click', async () => {
       overlayInfo('使用 Web Speech API 作为兜底。');
       stopWordHighlight();
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = /[a-zA-Z]/.test(text) ? 'en-US' : 'zh-CN';
+      const fallbackLang =
+        activeRole?.voice && activeRole.voice.trim()
+          ? activeRole.voice
+          : /[a-zA-Z]/.test(text)
+            ? 'en-US'
+            : 'zh-CN';
+      utterance.lang = fallbackLang;
       utterance.rate = speechRate;
       utterance.pitch = parseFloat(pitchSlider.value);
       audioDriving = true;
@@ -773,6 +1036,15 @@ async function initProviderAvailability() {
 }
 
 initProviderAvailability();
+
+loadRoles().catch((error) => {
+  console.warn('[stickbot] 初始化角色档案失败', error);
+  availableRoles = [sanitizeRole(DEFAULT_ROLE, 'default')];
+  populateRoleSelect();
+  applyRole(availableRoles[0], { persist: false }).catch((applyError) => {
+    console.warn('[stickbot] 回退角色应用失败', applyError);
+  });
+});
 
 renderWordTimeline();
 refreshWordTimelineStatus();
