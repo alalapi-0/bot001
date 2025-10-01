@@ -20,6 +20,13 @@
 3. **音量包络分析**：服务端仅返回音频时，通过 Web Audio `AnalyserNode` 计算 RMS 映射到 mouth，保持基本的张合效果。
 4. **占位时间轴**：以上途径均不可用时，会使用 `generatePlaceholderTimeline` 生成简易口型曲线，避免角色僵硬。
 
+## 逐词字幕与 WebVTT
+
+- `/tts` 现返回 `wordTimeline`，页面右侧面板会渲染逐词字幕条并根据音频 `currentTime` 高亮；
+- 点击“使用手动 VTT”复选框可覆盖服务端字幕，支持直接粘贴 WebVTT 文本并即时预览；
+- 若仅需字幕文件，可调用服务端 `GET /tts/vtt?text=...` 获取纯文本响应，无需下载音频；
+- DOM 中每个词块都会创建 `<span>` 元素，建议在长段落中控制句长（例如 <200 词）以避免过多节点导致渲染抖动。
+
 ## 大嘴巴头像
 
 - Vector 模式完全依赖 Canvas 绘制：

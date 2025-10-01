@@ -7,6 +7,7 @@
 import path from 'path';
 import { randomUUID } from 'crypto';
 import { ensureTimelineFallback } from '../utils/timeline.js';
+import { generateWordTimeline } from '../utils/wordTimeline.js';
 
 /**
  * @typedef {import('../mapping.js').VisemeConfig} VisemeConfig
@@ -90,11 +91,17 @@ export class AzureAdapter {
     });
 
     const duration = (Date.now() - start) / 1000;
+    const safeTimeline = ensureTimelineFallback(timeline);
+    const lastTimelineTime = safeTimeline.length > 0 ? safeTimeline[safeTimeline.length - 1].t : 0;
+    const totalDuration = Math.max(lastTimelineTime, duration);
+    const wordTimeline = generateWordTimeline(text, totalDuration);
+
     return {
       id: audioId,
       audioPath,
       audioType: 'audio/wav',
-      mouthTimeline: ensureTimelineFallback(timeline),
+      mouthTimeline: safeTimeline,
+      wordTimeline,
       duration,
     };
   }

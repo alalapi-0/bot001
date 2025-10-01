@@ -25,4 +25,7 @@
     </view>
     <view class="hint">服务端需在可信域名下运行，Sprite 贴图放入 <text selectable="true">/assets/mouth/v0.png</text> 等文件。</view>
   </view>
+  <view class="subtitle-bar">
+    <text>{{currentWord ? currentWord : ' '}}</text>
+  </view>
 </view>

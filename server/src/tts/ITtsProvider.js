@@ -15,6 +15,7 @@
  * @property {string} audioPath - 音频文件绝对路径。
  * @property {string} audioType - 音频 MIME 类型，如 `audio/wav`。
  * @property {{ t: number, v: number, visemeId: number, phoneme?: string }[]} mouthTimeline - mouth 时间轴采样点。
+ * @property {{ tStart: number, tEnd: number, text: string }[]} [wordTimeline] - 逐词时间轴，可用于字幕高亮。
  * @property {number} duration - 音频总时长（秒）。
  */
 

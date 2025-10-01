@@ -430,8 +430,15 @@ export const speakWithWebSpeech = (utterance, signal) => {
  * 请求服务端 `/tts` 接口，返回 JSON 结果。
  * @param {string} text - 合成文本。
  * @param {{ voice?: string, rate?: number, provider?: string, abortSignal?: AbortSignal }} options - 请求参数。
- * @returns {Promise<{ audioUrl: string, mouthTimeline: TimelinePoint[], duration: number, provider: string, sampleRate: number }>} 结果。
- */
+ * @returns {Promise<{
+ *   audioUrl: string,
+ *   mouthTimeline: TimelinePoint[],
+ *   wordTimeline?: { tStart: number, tEnd: number, text: string }[],
+ *   duration: number,
+ *   provider: string,
+ *   sampleRate: number,
+ * }>} 结果。
+*/
 export const requestServerTts = async (text, options = {}) => {
   const params = new URLSearchParams({ text });
   if (options.voice) params.set('voice', options.voice);

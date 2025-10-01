@@ -44,6 +44,14 @@
   - `visemeId` 采用距离更近的一个，避免频繁切换。
 - 定时器使用 `setInterval`，周期约 66ms（15FPS），可根据性能调节 `TIMER_INTERVAL`。
 - 播放结束或用户点击停止时会调用 `stopTimelineLoop()`，清理定时器并重置口型。
+- `wordTimeline` 会同步传入，通过 `getWordAtTime` 在底部字幕条展示当前词块。
+
+## 逐词字幕
+
+- 页面底部新增半圆形字幕条，展示当前词块文本；
+- `/tts` 返回的 `wordTimeline` 自动驱动字幕，若无数据会保持空白；
+- 可根据实际需求缩短文本或增大 `TIMER_INTERVAL`，避免在低端设备上频繁触发 `setData`；
+- 需要导出字幕时，可在服务端调用 `GET /tts/vtt` 或直接在网页端粘贴 WebVTT，再将同样的时间轴同步至小程序。
 
 ## 渲染模式
 

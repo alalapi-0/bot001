@@ -32,6 +32,12 @@ const providerHint = document.getElementById('provider-hint');
 const renderSelect = /** @type {HTMLSelectElement} */ (document.getElementById('render-mode'));
 const visemeDisplay = document.getElementById('viseme-display');
 const autoGainToggle = /** @type {HTMLInputElement} */ (document.getElementById('auto-gain-toggle'));
+const wordTimelineBar = /** @type {HTMLDivElement} */ (document.getElementById('word-timeline-bar'));
+const wordTimelineStatus = document.getElementById('word-timeline-status');
+const wordVttInput = /** @type {HTMLTextAreaElement} */ (document.getElementById('word-vtt-input'));
+const applyVttButton = /** @type {HTMLButtonElement} */ (document.getElementById('apply-vtt-btn'));
+const clearVttButton = /** @type {HTMLButtonElement} */ (document.getElementById('clear-vtt-btn'));
+const useManualVttCheckbox = /** @type {HTMLInputElement} */ (document.getElementById('use-manual-vtt'));
 
 // 初始化渲染器
 const avatar = new BigMouthAvatar(canvas);
@@ -47,6 +53,21 @@ mouthSignal.subscribe((frame) => {
     visemeDisplay.textContent = `viseme ${Math.round(frame.visemeId)} · ${frame.phoneme}`;
   }
 });
+
+/** @type {{ text: string, tStart: number, tEnd: number }[]} */
+let serverWordTimeline = [];
+/** @type {{ text: string, tStart: number, tEnd: number }[]} */
+let manualWordTimeline = [];
+/** @type {{ text: string, tStart: number, tEnd: number }[]} */
+let activeWordTimeline = [];
+/** @type {HTMLSpanElement[]} */
+let wordChipElements = [];
+/** @type {number|null} */
+let wordHighlightRaf = null;
+/** @type {number} */
+let lastActiveWordIndex = -1;
+/** @type {number|null} */
+let wordStatusResetTimer = null;
 
 const AUTO_GAIN_STORAGE_KEY = 'stickbot:auto-gain';
 
@@ -100,6 +121,254 @@ let placeholderTimer = null;
 let currentAudioCleanup = null;
 
 /**
+ * 解析可用的数字。
+ * @param {unknown} value - 原始值。
+ * @returns {number|null} 数字或 null。
+ */
+const pickNumeric = (value) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+};
+
+/**
+ * 将服务端或手动传入的逐词时间轴规范化。
+ * @param {Array<{ text?: string, tStart?: number, tEnd?: number, start?: number, end?: number, t?: number }>} timeline - 原始数
+据。
+ * @returns {{ text: string, tStart: number, tEnd: number }[]} 规范化时间轴。
+ */
+const normalizeWordTimeline = (timeline) => {
+  if (!Array.isArray(timeline)) {
+    return [];
+  }
+  return timeline
+    .map((item) => {
+      const rawText = item?.text ?? '';
+      const text = String(rawText).trim();
+      if (!text) {
+        return null;
+      }
+      const startCandidate = [item?.tStart, item?.start, item?.t].map(pickNumeric).find((value) => value !== null);
+      const endCandidate = [item?.tEnd, item?.end, item?.t].map(pickNumeric).find((value) => value !== null);
+      const start = Math.max(0, startCandidate ?? 0);
+      let end = endCandidate ?? start;
+      if (end < start) {
+        end = start;
+      }
+      if (end === start) {
+        end = start + 0.001;
+      }
+      return { text, tStart: start, tEnd: end };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.tStart - b.tStart);
+};
+
+/**
+ * 更新逐词字幕展示区域。
+ */
+const renderWordTimeline = () => {
+  if (!wordTimelineBar) return;
+  const useManual = useManualVttCheckbox?.checked;
+  const timeline = useManual ? manualWordTimeline : serverWordTimeline;
+  activeWordTimeline = timeline;
+  wordChipElements = [];
+  lastActiveWordIndex = -1;
+  wordTimelineBar.innerHTML = '';
+
+  if (!timeline || timeline.length === 0) {
+    const placeholder = document.createElement('span');
+    placeholder.className = 'word-timeline-status';
+    placeholder.textContent = useManual
+      ? '手动字幕为空，请粘贴有效的 WebVTT。'
+      : '暂无逐词字幕，等待服务端响应或启用手动 VTT。';
+    wordTimelineBar.appendChild(placeholder);
+    return;
+  }
+
+  timeline.forEach((item, index) => {
+    const chip = document.createElement('span');
+    chip.className = 'word-chip';
+    chip.textContent = item.text;
+    chip.dataset.index = String(index);
+    chip.dataset.start = String(item.tStart);
+    chip.dataset.end = String(item.tEnd);
+    wordTimelineBar.appendChild(chip);
+    wordChipElements.push(chip);
+  });
+};
+
+/**
+ * 更新字幕状态提示。
+ * @param {string} [message] - 可选提示信息。
+ */
+const refreshWordTimelineStatus = (message) => {
+  if (!wordTimelineStatus) return;
+  if (message) {
+    wordTimelineStatus.textContent = message;
+    if (wordStatusResetTimer !== null) {
+      clearTimeout(wordStatusResetTimer);
+    }
+    wordStatusResetTimer = window.setTimeout(() => {
+      wordStatusResetTimer = null;
+      refreshWordTimelineStatus();
+    }, 2000);
+    return;
+  }
+  if (wordStatusResetTimer !== null) {
+    clearTimeout(wordStatusResetTimer);
+    wordStatusResetTimer = null;
+  }
+  if (useManualVttCheckbox?.checked) {
+    wordTimelineStatus.textContent =
+      manualWordTimeline.length > 0 ? '正在使用手动 VTT 字幕。' : '已启用手动 VTT，请粘贴字幕文本。';
+  } else {
+    wordTimelineStatus.textContent =
+      serverWordTimeline.length > 0 ? '已加载服务端 wordTimeline。' : '服务端暂无 wordTimeline，可粘贴 WebVTT 覆盖。';
+  }
+};
+
+/**
+ * 保存服务端返回的逐词时间轴。
+ * @param {Array<{ text?: string, tStart?: number, tEnd?: number }>} timeline - 服务端时间轴。
+ */
+const setServerWordTimeline = (timeline) => {
+  serverWordTimeline = normalizeWordTimeline(timeline);
+  if (!useManualVttCheckbox?.checked) {
+    renderWordTimeline();
+  }
+  refreshWordTimelineStatus();
+};
+
+/**
+ * 保存手动粘贴的逐词时间轴。
+ * @param {Array<{ text?: string, tStart?: number, tEnd?: number }>} timeline - 手动时间轴。
+ */
+const setManualWordTimeline = (timeline) => {
+  manualWordTimeline = normalizeWordTimeline(timeline);
+  if (useManualVttCheckbox?.checked) {
+    renderWordTimeline();
+  }
+  refreshWordTimelineStatus();
+};
+
+/**
+ * 解析 WebVTT 时间戳。
+ * @param {string} value - 时间戳字符串。
+ * @returns {number} 秒数。
+ */
+const parseVttTimestamp = (value) => {
+  if (!value) return NaN;
+  const normalized = value.replace(',', '.').trim();
+  const match = normalized.match(/^(?:(\d+):)?(\d{2}):(\d{2})\.(\d{1,3})$/);
+  if (!match) {
+    return NaN;
+  }
+  const hours = Number(match[1] ?? '0');
+  const minutes = Number(match[2]);
+  const seconds = Number(match[3]);
+  const millis = Number(match[4].padEnd(3, '0'));
+  if ([hours, minutes, seconds, millis].some((num) => !Number.isFinite(num))) {
+    return NaN;
+  }
+  return hours * 3600 + minutes * 60 + seconds + millis / 1000;
+};
+
+/**
+ * 将 WebVTT 文本解析为逐词时间轴。
+ * @param {string} input - VTT 文本。
+ * @returns {{ text: string, tStart: number, tEnd: number }[]} 解析结果。
+ */
+const parseWebVtt = (input) => {
+  if (!input) return [];
+  const trimmed = input.replace(/\ufeff/g, '').trim();
+  if (!trimmed) return [];
+  const withoutHeader = trimmed.replace(/^WEBVTT[^\n]*\n?/i, '');
+  const blocks = withoutHeader.split(/\r?\n\r?\n+/).filter(Boolean);
+  const result = [];
+  for (const block of blocks) {
+    const lines = block.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    if (lines.length < 2) {
+      continue;
+    }
+    let cueIndex = 0;
+    if (/^\d+$/.test(lines[0])) {
+      cueIndex = 1;
+    }
+    const timingLine = lines[cueIndex];
+    if (!timingLine || !timingLine.includes('-->')) {
+      continue;
+    }
+    const [startRaw, endRaw] = timingLine.split(/-->/).map((part) => part.trim());
+    const start = parseVttTimestamp(startRaw);
+    const end = parseVttTimestamp(endRaw);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      continue;
+    }
+    const text = lines.slice(cueIndex + 1).join(' ').trim();
+    result.push({ text: text || '...', tStart: Math.max(0, start), tEnd: Math.max(start, end) });
+  }
+  return normalizeWordTimeline(result);
+};
+
+/**
+ * 启动逐词字幕高亮。
+ * @param {() => number} clock - 返回当前播放进度（秒）。
+ */
+const startWordHighlight = (clock) => {
+  stopWordHighlight();
+  if (!activeWordTimeline || activeWordTimeline.length === 0) {
+    return;
+  }
+  const update = () => {
+    const timeline = activeWordTimeline;
+    if (!timeline || timeline.length === 0) {
+      return;
+    }
+    const time = clock();
+    if (!Number.isFinite(time)) {
+      wordHighlightRaf = requestAnimationFrame(update);
+      return;
+    }
+    let index = -1;
+    for (let i = 0; i < timeline.length; i += 1) {
+      const segment = timeline[i];
+      if (time >= segment.tStart && time < segment.tEnd) {
+        index = i;
+        break;
+      }
+    }
+    if (index === -1 && timeline.length > 0 && time >= timeline[timeline.length - 1].tEnd) {
+      index = timeline.length - 1;
+    }
+    if (index !== lastActiveWordIndex) {
+      if (lastActiveWordIndex >= 0 && wordChipElements[lastActiveWordIndex]) {
+        wordChipElements[lastActiveWordIndex].classList.remove('active');
+      }
+      if (index >= 0 && wordChipElements[index]) {
+        wordChipElements[index].classList.add('active');
+      }
+      lastActiveWordIndex = index;
+    }
+    wordHighlightRaf = requestAnimationFrame(update);
+  };
+  wordHighlightRaf = requestAnimationFrame(update);
+};
+
+/**
+ * 停止字幕高亮并清理状态。
+ */
+const stopWordHighlight = () => {
+  if (wordHighlightRaf !== null) {
+    cancelAnimationFrame(wordHighlightRaf);
+    wordHighlightRaf = null;
+  }
+  if (lastActiveWordIndex >= 0 && wordChipElements[lastActiveWordIndex]) {
+    wordChipElements[lastActiveWordIndex].classList.remove('active');
+  }
+  lastActiveWordIndex = -1;
+};
+
+/**
  * 输出调试信息。
  * @param {string} message - 文案。
  */
@@ -132,6 +401,7 @@ function stopCurrentPlayback() {
   if ('speechSynthesis' in window) {
     window.speechSynthesis.cancel();
   }
+  stopWordHighlight();
   mouthSignal.stop();
   overlayInfo('已停止当前播放。');
 }
@@ -143,6 +413,62 @@ rateSlider.addEventListener('input', () => {
 pitchSlider.addEventListener('input', () => {
   pitchDisplay.textContent = pitchSlider.value;
 });
+
+if (applyVttButton) {
+  applyVttButton.addEventListener('click', () => {
+    if (!wordVttInput) return;
+    const parsed = parseWebVtt(wordVttInput.value);
+    if (parsed.length === 0) {
+      setManualWordTimeline([]);
+      refreshWordTimelineStatus('未解析出有效的 WebVTT 字幕。');
+      stopWordHighlight();
+      renderWordTimeline();
+      return;
+    }
+    setManualWordTimeline(parsed);
+    if (useManualVttCheckbox) {
+      useManualVttCheckbox.checked = true;
+    }
+    renderWordTimeline();
+    refreshWordTimelineStatus('已加载手动 VTT 字幕。');
+    if (currentAudio && !currentAudio.paused) {
+      startWordHighlight(() => currentAudio.currentTime);
+    }
+  });
+}
+
+if (clearVttButton) {
+  clearVttButton.addEventListener('click', () => {
+    setManualWordTimeline([]);
+    if (wordVttInput) {
+      wordVttInput.value = '';
+    }
+    renderWordTimeline();
+    refreshWordTimelineStatus('已清除手动字幕。');
+    if (currentAudio && !currentAudio.paused) {
+      stopWordHighlight();
+      if (activeWordTimeline.length > 0) {
+        startWordHighlight(() => currentAudio.currentTime);
+      }
+    }
+  });
+}
+
+if (useManualVttCheckbox) {
+  useManualVttCheckbox.addEventListener('change', () => {
+    renderWordTimeline();
+    refreshWordTimelineStatus();
+    if (currentAudio && !currentAudio.paused) {
+      if (activeWordTimeline.length > 0) {
+        startWordHighlight(() => currentAudio.currentTime);
+      } else {
+        stopWordHighlight();
+      }
+    } else {
+      stopWordHighlight();
+    }
+  });
+}
 
 // 渲染模式切换
 renderSelect.addEventListener('change', async () => {
@@ -199,14 +525,22 @@ playButton.addEventListener('click', async () => {
       console.warn('调用服务端 TTS 失败，将尝试 Web Speech 或回退。', error);
     }
 
+    if (serverResult) {
+      setServerWordTimeline(serverResult.wordTimeline || []);
+    } else {
+      setServerWordTimeline([]);
+    }
+
     if (serverResult && Array.isArray(serverResult.mouthTimeline) && serverResult.mouthTimeline.length > 0 && serverResult.audioUrl) {
       overlayInfo('使用服务端时间轴驱动口型。');
       await playWithTimeline(serverResult);
     } else if (serverResult && serverResult.audioUrl) {
       overlayInfo('服务端未提供时间轴，改用音量包络分析。');
+      stopWordHighlight();
       await playWithAnalyserUrl(serverResult.audioUrl);
     } else if (useWebSpeechCheckbox.checked && 'speechSynthesis' in window) {
       overlayInfo('使用 Web Speech API 作为兜底。');
+      stopWordHighlight();
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = /[a-zA-Z]/.test(text) ? 'en-US' : 'zh-CN';
       utterance.rate = speechRate;
@@ -214,6 +548,7 @@ playButton.addEventListener('click', async () => {
       await speakWithWebSpeech(utterance, mouthSignal);
     } else {
       overlayInfo('无法使用服务端或 Web Speech，播放占位时间轴。');
+      stopWordHighlight();
       const placeholder = generatePlaceholderTimeline(text);
       const startTime = performance.now();
       mouthSignal.start();
@@ -277,6 +612,7 @@ async function playWithTimeline(result) {
       audio.removeEventListener('error', handleError);
       currentAudio = null;
       currentAudioCleanup = null;
+      stopWordHighlight();
       mouthSignal.stop();
       if (status === 'error') {
         reject(error || new Error('音频播放失败'));
@@ -288,6 +624,11 @@ async function playWithTimeline(result) {
     const handlePlay = () => {
       mouthSignal.start();
       mouthSignal.playTimeline(result.mouthTimeline, () => audio.currentTime);
+      if (activeWordTimeline.length > 0) {
+        startWordHighlight(() => audio.currentTime);
+      } else {
+        stopWordHighlight();
+      }
     };
 
     const handleEnded = () => {
@@ -346,4 +687,7 @@ async function initProviderAvailability() {
 }
 
 initProviderAvailability();
+
+renderWordTimeline();
+refreshWordTimelineStatus();
 
