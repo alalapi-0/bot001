@@ -186,6 +186,25 @@ npm run dev
 - **前端**：纯静态资源，可部署到 Netlify、Vercel、GitHub Pages 或任意静态托管服务。
 - **服务端**：Express 应用可部署到 Render、Railway、Fly.io、Vercel Functions、阿里云函数计算等。部署时请通过 `.env` 配置真实 TTS/LLM 端点。
 
+### Nginx 反代示例
+
+- 若前端与服务端托管在同一台机器，可直接使用 `server/nginx.example.conf` 作为模版：
+  1. 将静态目录（例如 `web/` 构建产物）同步到服务器上的 `/var/www/stickbot/web`；
+  2. 调整示例中的 `root`、`server_name` 与端口，确认 Express 监听在 `127.0.0.1:8787`；
+  3. 将配置文件拷贝到 `/etc/nginx/conf.d/stickbot.conf`，执行 `nginx -t` 校验后 `systemctl reload nginx`；
+  4. 如需 HTTPS，可在 `server` 块中追加证书配置（`listen 443 ssl` 等），并删除示例内的注释跳转；
+  5. 若部署在内网环境，可将 `server_name` 改为实际域名或直接使用 `_` 作为默认站点。
+- 配置文件内包含 `/tts`、`/audio` 的反向代理以及音频缓存策略，若需要额外 API，可继续扩展 `location /api/`。
+- 前端若通过 CDN 下发，可将 `/assets/` 缓存策略调大，或直接改为上游 CDN 域名。
+
+### 常见故障排查清单
+
+1. **前端访问 404 或无法加载静态资源**：确认 `root` 指向的路径下存在 `index.html`，并检查是否遗漏 `try_files $uri $uri/ /index.html;`。
+2. **`/tts` 返回 502/504**：确认 Node 服务是否监听在 `127.0.0.1:8787`，必要时在 `.env` 中同步更新 `STICKBOT_SERVER_PORT` 并重启；同时检查防火墙或容器网络策略。
+3. **音频无法播放或被重复拉取**：确保 `server/nginx.example.conf` 中的 `proxy_cache_path` 目录已创建且 Nginx 有写权限，可通过 `sudo mkdir -p /var/cache/nginx/stickbot && sudo chown www-data /var/cache/nginx/stickbot` 初始化。
+4. **诊断叠层显示“请求中”不再变化**：检查浏览器控制台是否有跨域或 HTTPS 混用警告，必要时在前端 `window.STICKBOT_SERVER_ORIGIN` 中显式指定服务端地址。
+5. **摄像头捕捉不可用**：确认页面已通过 HTTPS 访问，浏览器权限授权成功，诊断叠层中的“捕捉模式”需显示为 `faceMesh` 或 `亮度估计` 才表示驱动成功。
+
 ## CDN 接入示例
 
 ```html

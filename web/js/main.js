@@ -47,6 +47,22 @@ const wordVttInput = /** @type {HTMLTextAreaElement} */ (document.getElementById
 const applyVttButton = /** @type {HTMLButtonElement} */ (document.getElementById('apply-vtt-btn'));
 const clearVttButton = /** @type {HTMLButtonElement} */ (document.getElementById('clear-vtt-btn'));
 const useManualVttCheckbox = /** @type {HTMLInputElement} */ (document.getElementById('use-manual-vtt'));
+const diagnosticsToggle = /** @type {HTMLInputElement} */ (document.getElementById('diagnostics-toggle'));
+const diagnosticsOverlay = document.getElementById('diagnostics-overlay');
+const diagnosticsFieldRefs = diagnosticsOverlay
+  ? {
+      syncSource: diagnosticsOverlay.querySelector('[data-diag="syncSource"]'),
+      captureMode: diagnosticsOverlay.querySelector('[data-diag="captureMode"]'),
+      mouthValue: diagnosticsOverlay.querySelector('[data-diag="mouthValue"]'),
+      emaValue: diagnosticsOverlay.querySelector('[data-diag="emaValue"]'),
+      visemeValue: diagnosticsOverlay.querySelector('[data-diag="visemeValue"]'),
+      segmentIndex: diagnosticsOverlay.querySelector('[data-diag="segmentIndex"]'),
+      preparedSegments: diagnosticsOverlay.querySelector('[data-diag="preparedSegments"]'),
+      prefetchSegments: diagnosticsOverlay.querySelector('[data-diag="prefetchSegments"]'),
+      bufferStatus: diagnosticsOverlay.querySelector('[data-diag="bufferStatus"]'),
+      extraInfo: diagnosticsOverlay.querySelector('[data-diag="extraInfo"]'),
+    }
+  : null;
 
 /**
  * @typedef {Object} StickBotPlugin
@@ -187,6 +203,179 @@ const FALLBACK_THEME_ENTRIES = [
     },
   },
 ];
+
+const DIAGNOSTICS_EMA_ALPHA = 0.28;
+
+const DIAGNOSTICS_STAGE_MAP = {
+  start: '等待首段',
+  prepared: '已缓冲',
+  'play-request': '等待播放',
+  'segment-start': '播放中',
+  prefetch: '预取中',
+  done: '已完成',
+  stopped: '已停止',
+  error: '异常',
+  reset: '准备中',
+};
+
+/**
+ * 诊断叠层内部状态。
+ * @type {{
+ *   enabled: boolean,
+ *   syncSource: string,
+ *   mouthValue: number,
+ *   emaValue: number,
+ *   visemeId: number,
+ *   phoneme: string,
+ *   captureMode: string,
+ *   extraInfo: string,
+ *   timeline: { total: number, prepared: number, prefetched: number, current: number, status: string },
+ * }}
+ */
+const diagnosticsState = {
+  enabled: Boolean(diagnosticsToggle?.checked),
+  syncSource: '空闲',
+  mouthValue: 0,
+  emaValue: 0,
+  visemeId: 0,
+  phoneme: 'idle',
+  captureMode: '关闭',
+  extraInfo: '等待音频或摄像头驱动。',
+  timeline: {
+    total: 0,
+    prepared: 0,
+    prefetched: 0,
+    current: -1,
+    status: '空闲',
+  },
+};
+
+let diagnosticsEma = diagnosticsState.emaValue;
+
+/**
+ * 将数值格式化为两位小数文本。
+ * @param {number} value - 原始数值。
+ * @returns {string} 已格式化字符串。
+ */
+const formatDiagnosticsValue = (value) => {
+  if (!Number.isFinite(value)) {
+    return '0.00';
+  }
+  return value.toFixed(2);
+};
+
+/**
+ * 刷新诊断叠层的 DOM 展示。
+ */
+const renderDiagnosticsOverlay = () => {
+  if (!diagnosticsOverlay || !diagnosticsFieldRefs) {
+    return;
+  }
+  diagnosticsOverlay.dataset.active = diagnosticsState.enabled ? 'true' : 'false';
+  diagnosticsOverlay.setAttribute('aria-hidden', diagnosticsState.enabled ? 'false' : 'true');
+  if (diagnosticsFieldRefs.syncSource) {
+    diagnosticsFieldRefs.syncSource.textContent = diagnosticsState.syncSource;
+  }
+  if (diagnosticsFieldRefs.captureMode) {
+    diagnosticsFieldRefs.captureMode.textContent = diagnosticsState.captureMode;
+  }
+  if (diagnosticsFieldRefs.mouthValue) {
+    diagnosticsFieldRefs.mouthValue.textContent = formatDiagnosticsValue(diagnosticsState.mouthValue);
+  }
+  if (diagnosticsFieldRefs.emaValue) {
+    diagnosticsFieldRefs.emaValue.textContent = formatDiagnosticsValue(diagnosticsState.emaValue);
+  }
+  if (diagnosticsFieldRefs.visemeValue) {
+    diagnosticsFieldRefs.visemeValue.textContent = `#${Math.max(0, Math.round(diagnosticsState.visemeId))} · ${
+      diagnosticsState.phoneme || 'idle'
+    }`;
+  }
+  const totalSegments = Math.max(0, diagnosticsState.timeline.total);
+  const currentDisplay = diagnosticsState.timeline.current >= 0
+    ? Math.min(diagnosticsState.timeline.current + 1, totalSegments || 0)
+    : 0;
+  if (diagnosticsFieldRefs.segmentIndex) {
+    diagnosticsFieldRefs.segmentIndex.textContent = `${currentDisplay} / ${totalSegments}`;
+  }
+  if (diagnosticsFieldRefs.preparedSegments) {
+    diagnosticsFieldRefs.preparedSegments.textContent = String(Math.max(0, diagnosticsState.timeline.prepared));
+  }
+  if (diagnosticsFieldRefs.prefetchSegments) {
+    diagnosticsFieldRefs.prefetchSegments.textContent = String(Math.max(0, diagnosticsState.timeline.prefetched));
+  }
+  if (diagnosticsFieldRefs.bufferStatus) {
+    diagnosticsFieldRefs.bufferStatus.textContent = diagnosticsState.timeline.status;
+  }
+  if (diagnosticsFieldRefs.extraInfo) {
+    diagnosticsFieldRefs.extraInfo.textContent = diagnosticsState.extraInfo;
+  }
+};
+
+/**
+ * 合并诊断状态并刷新显示。
+ * @param {{ syncSource?: string, mouthValue?: number, emaValue?: number, visemeId?: number, phoneme?: string, captureMode?: string, extraInfo?: string, timeline?: Partial<{ total: number, prepared: number, prefetched: number, current: number, status: string }> }} patch - 更新片段。
+ */
+const updateDiagnosticsState = (patch = {}) => {
+  if (!patch) {
+    return;
+  }
+  const { timeline, ...rest } = patch;
+  Object.assign(diagnosticsState, rest);
+  if (timeline) {
+    diagnosticsState.timeline = { ...diagnosticsState.timeline, ...timeline };
+  }
+  renderDiagnosticsOverlay();
+};
+
+/**
+ * 处理时间轴播放器上报，更新缓冲与段索引展示。
+ * @param {{ stage?: string, statusText?: string, totalSegments?: number, preparedSegments?: number, prefetchedSegments?: number, currentIndex?: number }} payload - 播放阶段数据。
+ */
+const handleTimelineDiagnostics = (payload = {}) => {
+  if (!payload) {
+    return;
+  }
+  const statusText = payload.statusText || (payload.stage ? DIAGNOSTICS_STAGE_MAP[payload.stage] : '');
+  const totalSegments =
+    typeof payload.totalSegments === 'number' ? Math.max(0, payload.totalSegments) : diagnosticsState.timeline.total;
+  const preparedSegments =
+    typeof payload.preparedSegments === 'number'
+      ? Math.max(0, payload.preparedSegments)
+      : diagnosticsState.timeline.prepared;
+  const prefetchedSegments =
+    typeof payload.prefetchedSegments === 'number'
+      ? Math.max(0, payload.prefetchedSegments)
+      : diagnosticsState.timeline.prefetched;
+  const currentIndex =
+    typeof payload.currentIndex === 'number' ? payload.currentIndex : diagnosticsState.timeline.current;
+  const displayIndex = currentIndex >= 0 ? Math.min(currentIndex + 1, totalSegments || 0) : 0;
+  const infoText = statusText
+    ? totalSegments > 0
+      ? `${statusText} · 段 ${displayIndex}/${totalSegments}`
+      : statusText
+    : undefined;
+  updateDiagnosticsState({
+    timeline: {
+      total: totalSegments,
+      prepared: preparedSegments,
+      prefetched: prefetchedSegments,
+      current: currentIndex,
+      status: statusText || diagnosticsState.timeline.status,
+    },
+    ...(infoText ? { extraInfo: infoText } : {}),
+  });
+};
+
+if (diagnosticsToggle && diagnosticsOverlay) {
+  diagnosticsToggle.addEventListener('change', () => {
+    diagnosticsState.enabled = diagnosticsToggle.checked;
+    renderDiagnosticsOverlay();
+  });
+} else {
+  diagnosticsState.enabled = false;
+}
+
+renderDiagnosticsOverlay();
 
 /** @type {Map<string, { id: string, name: string, data: import('./avatar.js').AvatarTheme }>} */
 const themeRegistry = new Map();
@@ -496,6 +685,14 @@ mouthSignal.subscribe((frame) => {
   if (visemeDisplay) {
     visemeDisplay.textContent = `viseme ${Math.round(frame.visemeId)} · ${frame.phoneme}`;
   }
+  diagnosticsEma += (frame.value - diagnosticsEma) * DIAGNOSTICS_EMA_ALPHA;
+  diagnosticsEma = Math.max(0, Math.min(1, diagnosticsEma));
+  updateDiagnosticsState({
+    mouthValue: frame.value,
+    emaValue: diagnosticsEma,
+    visemeId: frame.visemeId,
+    phoneme: frame.phoneme,
+  });
 });
 
 /** @type {{ text: string, tStart: number, tEnd: number }[]} */
@@ -518,6 +715,29 @@ let audioDriving = false;
 let mouthCaptureActive = false;
 /** @type {TimelinePlayer|null} */
 let activeTimelinePlayer = null;
+
+pluginBus.addEventListener('stickbot:mouth-capture:status', (event) => {
+  const detail = event?.detail || {};
+  const active = Boolean(detail.active);
+  mouthCaptureActive = active;
+  const mode = typeof detail.mode === 'string' ? detail.mode : 'idle';
+  const captureLabel = active ? (mode === 'facemesh' ? 'faceMesh' : mode === 'luma' ? '亮度估计' : '随机波动') : '关闭';
+  updateDiagnosticsState({ captureMode: captureLabel });
+  if (active && !audioDriving) {
+    updateDiagnosticsState({
+      syncSource: '摄像头捕捉',
+      timeline: { total: 0, prepared: 0, prefetched: 0, current: -1, status: '摄像头驱动' },
+      extraInfo: '摄像头帧直接驱动 mouth 值。',
+    });
+  }
+  if (!active && !audioDriving) {
+    updateDiagnosticsState({
+      syncSource: '空闲',
+      timeline: { total: 0, prepared: 0, prefetched: 0, current: -1, status: '空闲' },
+      extraInfo: '等待音频或摄像头驱动。',
+    });
+  }
+});
 
 const TIMELINE_PREFS = (() => {
   const defaults = {
@@ -1464,6 +1684,14 @@ class TimelinePlayer {
    *   onSegmentEnd?: (index: number) => void,
    *   onPlaybackComplete?: (context: { stopped: boolean }) => void,
    *   onPlaybackError?: (error: Error) => void,
+   *   diagnosticsReporter?: (state: {
+   *     stage?: string,
+   *     statusText?: string,
+   *     totalSegments?: number,
+   *     preparedSegments?: number,
+   *     prefetchedSegments?: number,
+   *     currentIndex?: number,
+   *   }) => void,
    * }} options - 配置。
    */
   constructor(options) {
@@ -1506,6 +1734,22 @@ class TimelinePlayer {
     this.finished = false;
     this.resolvePlayback = null;
     this.rejectPlayback = null;
+    this.diagnosticsReporter = typeof options.diagnosticsReporter === 'function' ? options.diagnosticsReporter : null;
+  }
+
+  reportDiagnostics(extra = {}) {
+    if (!this.diagnosticsReporter) {
+      return;
+    }
+    const payload = {
+      totalSegments: this.totalSegments,
+      preparedSegments: this.loadedSegments.size,
+      prefetchedSegments: this.prefetchIndices.size,
+      currentIndex: typeof extra.currentIndex === 'number' ? extra.currentIndex : this.currentIndex,
+      stage: extra.stage,
+      statusText: extra.statusText,
+    };
+    this.diagnosticsReporter(payload);
   }
 
   resetState() {
@@ -1530,6 +1774,7 @@ class TimelinePlayer {
     this.mouthSignalActive = false;
     this.stopped = false;
     this.finished = false;
+    this.reportDiagnostics({ stage: 'reset', statusText: '准备中', currentIndex: -1 });
   }
 
   /**
@@ -1541,6 +1786,7 @@ class TimelinePlayer {
   async play(initialResult, fetchers = []) {
     this.resetState();
     this.totalSegments = 1 + fetchers.length;
+    this.reportDiagnostics({ stage: 'start', statusText: '等待首段', currentIndex: -1 });
     this.segmentPromises.set(0, Promise.resolve(initialResult));
     fetchers.forEach((fn, idx) => {
       this.segmentFetchers.set(idx + 1, fn);
@@ -1570,6 +1816,7 @@ class TimelinePlayer {
       this.finish('done');
       return;
     }
+    this.reportDiagnostics({ stage: 'play-request', statusText: '等待播放', currentIndex: index });
     let result;
     try {
       result = await promise;
@@ -1634,6 +1881,7 @@ class TimelinePlayer {
     if (typeof this.onSegmentPrepared === 'function') {
       this.onSegmentPrepared(index, result, offset, duration);
     }
+    this.reportDiagnostics({ stage: 'prepared', statusText: '已缓冲', currentIndex: index });
     return { offset, duration };
   }
 
@@ -1720,6 +1968,7 @@ class TimelinePlayer {
         if (typeof this.onSegmentStart === 'function') {
           this.onSegmentStart(audio, index, clock);
         }
+        this.reportDiagnostics({ stage: 'segment-start', statusText: '播放中', currentIndex: index });
         if (this.prefetchThreshold > 0) {
           this.armPrefetch(index + 1, expectedDuration, audio);
         }
@@ -1842,6 +2091,7 @@ class TimelinePlayer {
         if (ratio >= threshold) {
           this.prefetchIndices.add(nextIndex);
           this.obtainSegmentPromise(nextIndex);
+          this.reportDiagnostics({ stage: 'prefetch', statusText: '预取中', currentIndex: this.currentIndex });
           this.monitorId = null;
           return;
         }
@@ -1895,6 +2145,9 @@ class TimelinePlayer {
       this.currentAudio.pause();
     }
     this.currentAudio = null;
+    const statusText =
+      status === 'error' ? '异常' : status === 'stopped' ? '已停止' : status === 'done' ? '已完成' : '空闲';
+    this.reportDiagnostics({ stage: status, statusText, currentIndex: this.currentIndex });
     if (status === 'error') {
       const errorObj = error instanceof Error ? error : new Error(String(error));
       if (typeof this.onPlaybackError === 'function') {
@@ -1919,6 +2172,7 @@ const playWithTimelineSegments = async ({ initial, fetchers = [], wordCollector 
     mouthSignal,
     prefetchThreshold: TIMELINE_PREFS.prefetchThreshold,
     latencyCompensation: TIMELINE_PREFS.latencyCompensation,
+    diagnosticsReporter: handleTimelineDiagnostics,
     onSegmentPrepared: (index, result, offset) => {
       if (wordCollector) {
         appendWordTimelineEntries(wordCollector, result?.wordTimeline || [], offset);
@@ -1997,6 +2251,17 @@ function stopCurrentPlayback() {
   mouthSignal.stop();
   audioDriving = false;
   overlayInfo('已停止当前播放。');
+  updateDiagnosticsState({
+    syncSource: mouthCaptureActive ? '摄像头捕捉' : '空闲',
+    timeline: {
+      total: 0,
+      prepared: 0,
+      prefetched: 0,
+      current: -1,
+      status: mouthCaptureActive ? '摄像头驱动' : '已停止',
+    },
+    extraInfo: mouthCaptureActive ? '摄像头帧直接驱动 mouth 值。' : '已停止播放。',
+  });
 }
 
 // 滑条即时更新数值显示
@@ -2096,6 +2361,11 @@ playButton.addEventListener('click', async () => {
   const text = textArea.value.trim();
   if (!text) {
     overlayInfo('请输入要朗读的文本，已播放占位口型。');
+    updateDiagnosticsState({
+      syncSource: '占位时间轴',
+      extraInfo: '输入为空，播放默认占位节奏。',
+      timeline: { total: 0, prepared: 0, prefetched: 0, current: -1, status: '占位播放' },
+    });
     const timeline = generatePlaceholderTimeline('...');
     const startTime = performance.now();
     audioDriving = true;
@@ -2109,6 +2379,13 @@ playButton.addEventListener('click', async () => {
       placeholderTimer = null;
       mouthSignal.stop();
       audioDriving = false;
+      if (diagnosticsState.timeline.status !== '异常') {
+        updateDiagnosticsState({
+          syncSource: mouthCaptureActive ? '摄像头捕捉' : '空闲',
+          timeline: { total: 0, prepared: 0, prefetched: 0, current: -1, status: mouthCaptureActive ? '摄像头驱动' : '空闲' },
+          extraInfo: mouthCaptureActive ? '摄像头帧直接驱动 mouth 值。' : '等待音频或摄像头驱动。',
+        });
+      }
     }, (duration + 0.4) * 1000);
     return;
   }
@@ -2123,6 +2400,11 @@ playButton.addEventListener('click', async () => {
     const speechRate = parseFloat(rateSlider.value);
     const espeakRate = Math.max(80, Math.round(170 * speechRate));
     currentAbort = new AbortController();
+    updateDiagnosticsState({
+      syncSource: '服务端 TTS 请求',
+      extraInfo: '等待服务端返回音频与时间轴...',
+      timeline: { total: 0, prepared: 0, prefetched: 0, current: -1, status: '请求中' },
+    });
 
     const segments = splitTextIntoSegments(text);
     let useSegmentedPlayback = TIMELINE_PREFS.segmentMode !== 'off' && segments.length > 1;
@@ -2191,6 +2473,17 @@ playButton.addEventListener('click', async () => {
           )
         : [];
       overlayInfo(useSegmentedPlayback ? '使用分段时间轴驱动口型。' : '使用服务端时间轴驱动口型。');
+      updateDiagnosticsState({
+        syncSource: useSegmentedPlayback ? '分段时间轴' : '服务端时间轴',
+        extraInfo: useSegmentedPlayback ? '分段 mouthTimeline 播放中。' : '使用服务端 mouthTimeline 播放中。',
+        timeline: {
+          total: 1 + fetchers.length,
+          prepared: 0,
+          prefetched: 0,
+          current: -1,
+          status: '等待首段',
+        },
+      });
       audioDriving = true;
       try {
         await playWithTimelineSegments({
@@ -2205,6 +2498,11 @@ playButton.addEventListener('click', async () => {
       overlayInfo('服务端未提供时间轴，改用音量包络分析。');
       stopWordHighlight();
       setServerWordTimeline([]);
+      updateDiagnosticsState({
+        syncSource: '音量包络',
+        extraInfo: '通过 Web Audio analyser 驱动口型。',
+        timeline: { total: 0, prepared: 0, prefetched: 0, current: -1, status: '音频分析' },
+      });
       audioDriving = true;
       try {
         await playWithAnalyserUrl(initialResult.audioUrl);
@@ -2215,6 +2513,11 @@ playButton.addEventListener('click', async () => {
       overlayInfo('使用 Web Speech API 作为兜底。');
       stopWordHighlight();
       setServerWordTimeline([]);
+      updateDiagnosticsState({
+        syncSource: 'Web Speech',
+        extraInfo: '使用 SpeechSynthesis boundary 事件触发 mouth 脉冲。',
+        timeline: { total: 0, prepared: 0, prefetched: 0, current: -1, status: '实时脉冲' },
+      });
       const utterance = new SpeechSynthesisUtterance(text);
       const fallbackLang =
         activeRole?.voice && activeRole.voice.trim()
@@ -2235,6 +2538,11 @@ playButton.addEventListener('click', async () => {
       overlayInfo('无法使用服务端或 Web Speech，播放占位时间轴。');
       stopWordHighlight();
       setServerWordTimeline([]);
+      updateDiagnosticsState({
+        syncSource: '占位时间轴',
+        extraInfo: '根据文本长度生成占位口型曲线。',
+        timeline: { total: 0, prepared: 0, prefetched: 0, current: -1, status: '占位播放' },
+      });
       const placeholder = generatePlaceholderTimeline(text);
       const startTime = performance.now();
       audioDriving = true;
@@ -2248,17 +2556,45 @@ playButton.addEventListener('click', async () => {
         placeholderTimer = null;
         mouthSignal.stop();
         audioDriving = false;
+        if (diagnosticsState.timeline.status !== '异常') {
+          updateDiagnosticsState({
+            syncSource: mouthCaptureActive ? '摄像头捕捉' : '空闲',
+            timeline: { total: 0, prepared: 0, prefetched: 0, current: -1, status: mouthCaptureActive ? '摄像头驱动' : '空闲' },
+            extraInfo: mouthCaptureActive ? '摄像头帧直接驱动 mouth 值。' : '等待音频或摄像头驱动。',
+          });
+        }
       }, (duration + 0.4) * 1000);
     }
   } catch (error) {
     console.error('播放失败：', error);
-    overlayInfo(`播放失败：${error instanceof Error ? error.message : String(error)}`);
+    const message = error instanceof Error ? error.message : String(error);
+    overlayInfo(`播放失败：${message}`);
+    updateDiagnosticsState({
+      timeline: { status: '异常', current: -1 },
+      extraInfo: `异常：${message}`,
+    });
     mouthSignal.stop();
     audioDriving = false;
   } finally {
     playButton.disabled = false;
     currentAbort = null;
     overlayInfo('播放流程结束。');
+    if (diagnosticsState.timeline.status === '异常') {
+      return;
+    }
+    if (mouthCaptureActive) {
+      updateDiagnosticsState({
+        syncSource: '摄像头捕捉',
+        timeline: { total: 0, prepared: 0, prefetched: 0, current: -1, status: '摄像头驱动' },
+        extraInfo: '摄像头帧直接驱动 mouth 值。',
+      });
+    } else {
+      updateDiagnosticsState({
+        syncSource: '空闲',
+        timeline: { total: 0, prepared: 0, prefetched: 0, current: -1, status: '空闲' },
+        extraInfo: '等待音频或摄像头驱动。',
+      });
+    }
   }
 });
 
