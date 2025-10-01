@@ -429,7 +429,7 @@ export const speakWithWebSpeech = (utterance, signal) => {
 /**
  * 请求服务端 `/tts` 接口，返回 JSON 结果。
  * @param {string} text - 合成文本。
- * @param {{ voice?: string, rate?: number, provider?: string, abortSignal?: AbortSignal }} options - 请求参数。
+ * @param {{ voice?: string, rate?: number, provider?: string, abortSignal?: AbortSignal, segmentIndex?: number, segmentCount?: number, segmentId?: string }} options - 请求参数。
  * @returns {Promise<{
  *   audioUrl: string,
  *   mouthTimeline: TimelinePoint[],
@@ -444,6 +444,9 @@ export const requestServerTts = async (text, options = {}) => {
   if (options.voice) params.set('voice', options.voice);
   if (options.rate) params.set('rate', String(options.rate));
   if (options.provider) params.set('provider', options.provider);
+  if (Number.isFinite(options.segmentIndex)) params.set('segmentIndex', String(options.segmentIndex));
+  if (Number.isFinite(options.segmentCount)) params.set('segmentCount', String(options.segmentCount));
+  if (options.segmentId) params.set('segmentId', options.segmentId);
   const response = await fetch(resolveServerUrl(`/tts?${params.toString()}`), {
     method: 'GET',
     signal: options.abortSignal,

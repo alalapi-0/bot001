@@ -30,6 +30,8 @@ npm run dev:server
 | `MAX_TEXT_LEN` | `5000` | 单次合成允许的最大字数，超过即返回 413。 |
 | `RATE_LIMIT_RPS` | `5` | 全局每秒最多允许的合成请求数，超过返回 429。 |
 | `MAX_CONCURRENCY` | `2` | 同时进行的合成任务上限，超过返回 429。 |
+| `TTS_CACHE_MAX_ENTRIES` | `1000` | `/tts` 接口的内存缓存上限，超过后按照 LRU 淘汰旧条目。 |
+| `TTS_CACHE_TTL_MS` | `3600000` | `/tts` 缓存的有效期（毫秒），默认 1 小时。 |
 | `MOUTH_SAMPLE_RATE` | `80` | mouth 时间轴采样频率（Hz），建议 60–100。 |
 | `CORS_WHITELIST` | 空 | 生产环境域名白名单，逗号分隔。 |
 | `AZURE_REGION` | 空 | Azure 语音服务区域。 |
@@ -105,6 +107,15 @@ an 20 100
 | 9 | 0.62 |
 
 mouth 值范围为 `[0,1]`，前端按照线性插值驱动“大嘴巴”头像的唇形、牙齿与嘴角角度。
+
+## 缓存与并发去重
+
+自第三轮起，`/tts` 接口会将合成结果缓存在内存中，键值由 `text + voice + rate + provider` 以及可选的分段标识组成。命中缓存时会直接返回已有的 `audioUrl` 与 `mouthTimeline`/`wordTimeline`，避免重复执行合成命令。对于正在进行的合成任务，服务器会将相同键值的请求挂载到同一个 Promise 上，待首个请求完成后共享结果，从而避免并发风暴。
+
+- 可通过 `TTS_CACHE_MAX_ENTRIES` 控制 LRU 容量，默认 1000 条；超过后按最久未使用顺序淘汰。
+- `TTS_CACHE_TTL_MS` 指定缓存条目过期时间，默认为 1 小时。若设置大于临时音频文件的清理周期，请同步调整 `TMP_FILE_TTL_MS`，确保音频链接仍然可用。
+- 并发去重：相同键值的请求会挂载到首个合成 Promise 上，仅触发一次外部 TTS 调用，其余请求在 Promise resolve 后共享音频/时间轴结果，可有效避免雪崩式回放。
+- 缓存命中与占用可在 `GET /metrics` 中查看：新增 `tts_cache_entries` 与 `tts_cache_bytes` 字段，便于粗略估算内存使用量（一般中文文本每条约 5–20KB）。
 
 ## Azure 适配示例
 
@@ -186,6 +197,8 @@ tmp_files=3
 - `daily_synth_count`：当日成功合成总次数（跨日自动清零）。
 - `avg_synth_seconds`：当日合成耗时均值（壁钟时间，秒）。
 - `tmp_files`：临时目录下文件总数，用于监控清理任务是否正常运行。
+- `tts_cache_entries`：当前内存缓存条目数量。
+- `tts_cache_bytes`：缓存估算占用的字节数。
 
 ### `GET /audio/:id`
 

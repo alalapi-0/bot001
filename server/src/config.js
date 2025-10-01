@@ -63,6 +63,8 @@ export const loadServerConfig = async () => {
   const maxTextLen = Number(process.env.MAX_TEXT_LEN || 5000);
   const rateLimitRps = Number(process.env.RATE_LIMIT_RPS || 5);
   const maxConcurrency = Number(process.env.MAX_CONCURRENCY || 2);
+  const cacheMaxEntries = Number(process.env.TTS_CACHE_MAX_ENTRIES || 1000);
+  const cacheTtlMs = Number(process.env.TTS_CACHE_TTL_MS || 60 * 60 * 1000);
 
   /**
    * 若设置了自定义 viseme 映射文件，则尝试解析；
@@ -96,6 +98,10 @@ export const loadServerConfig = async () => {
       maxTextLen: Number.isFinite(maxTextLen) && maxTextLen > 0 ? maxTextLen : 5000,
       rateLimitRps: Number.isFinite(rateLimitRps) && rateLimitRps > 0 ? rateLimitRps : 5,
       maxConcurrency: Number.isFinite(maxConcurrency) && maxConcurrency > 0 ? maxConcurrency : 2,
+    },
+    cache: {
+      maxEntries: Number.isFinite(cacheMaxEntries) && cacheMaxEntries > 0 ? cacheMaxEntries : 1000,
+      ttlMs: Number.isFinite(cacheTtlMs) && cacheTtlMs > 0 ? cacheTtlMs : 60 * 60 * 1000,
     },
     logDir,
   };
