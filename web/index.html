@@ -127,6 +127,11 @@
         color: var(--card-text);
       }
 
+      .selector-hint {
+        font-size: 12px;
+        color: var(--hint-text);
+      }
+
       .role-description {
         margin: 0;
         font-size: 13px;
@@ -280,7 +285,7 @@
         --chip-active-shadow: 0 6px 16px rgba(234, 88, 12, 0.28);
       }
 
-      body.theme-noir {
+      body.theme-dark {
         --page-bg: #0f172a;
         --page-text: #e2e8f0;
         --card-bg: #1e293b;
@@ -302,26 +307,26 @@
         --chip-active-shadow: 0 8px 22px rgba(14, 165, 233, 0.38);
       }
 
-      body.theme-pastel {
-        --page-bg: #f3e8ff;
-        --page-text: #4c1d95;
-        --card-bg: #fdf4ff;
-        --card-text: #4c1d95;
-        --card-shadow: 0 12px 32px rgba(76, 29, 149, 0.12);
-        --card-border: rgba(192, 132, 252, 0.35);
-        --accent-bg: #a855f7;
-        --accent-text: #fdf4ff;
-        --secondary-bg: #e9d5ff;
-        --secondary-text: #4c1d95;
-        --hint-text: #7c3aed;
-        --timeline-bg: rgba(253, 244, 255, 0.88);
-        --timeline-border: rgba(192, 132, 252, 0.4);
-        --input-border: rgba(167, 85, 247, 0.4);
-        --chip-bg: rgba(167, 85, 247, 0.14);
-        --chip-text: #6d28d9;
-        --chip-active-bg: #9333ea;
-        --chip-active-text: #fdf4ff;
-        --chip-active-shadow: 0 6px 18px rgba(147, 51, 234, 0.32);
+      body.theme-minimal {
+        --page-bg: #f5f5f4;
+        --page-text: #1f2937;
+        --card-bg: #ffffff;
+        --card-text: #1f2937;
+        --card-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+        --card-border: rgba(31, 41, 55, 0.1);
+        --accent-bg: #111827;
+        --accent-text: #f9fafb;
+        --secondary-bg: #e5e7eb;
+        --secondary-text: #1f2937;
+        --hint-text: #4b5563;
+        --timeline-bg: #f8fafc;
+        --timeline-border: #e2e8f0;
+        --input-border: #d1d5db;
+        --chip-bg: rgba(17, 24, 39, 0.08);
+        --chip-text: #111827;
+        --chip-active-bg: #1f2937;
+        --chip-active-text: #f8fafc;
+        --chip-active-shadow: 0 6px 16px rgba(17, 24, 39, 0.25);
       }
     </style>
   </head>
@@ -336,6 +341,11 @@
           <select id="role-select"></select>
           <p class="role-description" id="role-description">选择不同角色，stickbot 将切换 voice、表情预设与主题皮肤。</p>
           <p class="role-meta" id="role-meta"></p>
+        </div>
+        <div class="selector-group">
+          <label for="theme-select">主题皮肤</label>
+          <select id="theme-select"></select>
+          <small class="selector-hint">页面选择优先级最高，可覆盖角色默认主题。</small>
         </div>
         <div class="selector-group">
           <label for="tts-provider">TTS 供应器</label>

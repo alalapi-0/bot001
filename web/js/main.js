@@ -3,7 +3,7 @@
  * @description 浏览器入口逻辑：协调 UI、TTS 请求与 BigMouthAvatar 渲染。
  */
 
-import { BigMouthAvatar } from './avatar.js';
+import { BigMouthAvatar, DEFAULT_THEME } from './avatar.js';
 import {
   MouthSignal,
   speakWithWebSpeech,
@@ -32,6 +32,7 @@ const providerSelect = /** @type {HTMLSelectElement} */ (document.getElementById
 const providerHint = document.getElementById('provider-hint');
 const renderSelect = /** @type {HTMLSelectElement} */ (document.getElementById('render-mode'));
 const roleSelect = /** @type {HTMLSelectElement} */ (document.getElementById('role-select'));
+const themeSelect = /** @type {HTMLSelectElement} */ (document.getElementById('theme-select'));
 const roleDescription = document.getElementById('role-description');
 const roleMeta = document.getElementById('role-meta');
 const defaultRoleDescription = roleDescription?.textContent || '';
@@ -46,9 +47,346 @@ const applyVttButton = /** @type {HTMLButtonElement} */ (document.getElementById
 const clearVttButton = /** @type {HTMLButtonElement} */ (document.getElementById('clear-vtt-btn'));
 const useManualVttCheckbox = /** @type {HTMLInputElement} */ (document.getElementById('use-manual-vtt'));
 
+const THEME_STORAGE_KEY = 'stickbot:manual-theme';
+
+const THEME_ALIASES = {
+  noir: 'dark',
+  pastel: 'minimal',
+  default: 'classic',
+};
+
+const cloneTheme = (theme) => JSON.parse(JSON.stringify(theme || {}));
+
+const FALLBACK_THEME_ENTRIES = [
+  {
+    id: 'classic',
+    name: '经典紫调',
+    data: {
+      id: 'classic',
+      name: '经典紫调',
+      bg: '#f5f5f5',
+      lineWidth: 6,
+      stroke: '#1f2937',
+      fill: '#f3f4ff',
+      body: { stroke: '#1f2937', lineWidth: 6 },
+      head: { stroke: '#312e81', fill: '#f3f4ff', lineWidth: 5 },
+      eye: { stroke: '#312e81', lineWidth: 4, gap: 20, minHeight: 2 },
+      mouth: {
+        stroke: '#7c3aed',
+        lineWidth: 6,
+        fill: '#4c1d95',
+        innerFill: '#4c1d95',
+        toothFill: '#ede9fe',
+        toothCount: 6,
+        toothScale: 1,
+        widthScale: 1,
+        heightScale: 1,
+        cornerCurveBase: 0.1,
+        highlightStroke: '#a855f7',
+        highlightWidth: 2,
+        roundedViseme: 9,
+      },
+    },
+  },
+  {
+    id: 'bright',
+    name: '暖阳活力',
+    data: {
+      id: 'bright',
+      name: '暖阳活力',
+      bg: '#fff7ed',
+      lineWidth: 6,
+      stroke: '#7c2d12',
+      fill: '#fffaf0',
+      body: { stroke: '#7c2d12', lineWidth: 6 },
+      head: { stroke: '#9a3412', fill: '#fffaf0', lineWidth: 5 },
+      eye: { stroke: '#9a3412', lineWidth: 4, gap: 22, minHeight: 2 },
+      mouth: {
+        stroke: '#ea580c',
+        lineWidth: 6,
+        fill: '#c2410c',
+        innerFill: '#c2410c',
+        toothFill: '#fffbeb',
+        toothCount: 5,
+        toothScale: 1.1,
+        widthScale: 1.05,
+        heightScale: 1.1,
+        cornerCurveBase: 0.08,
+        highlightStroke: '#fb923c',
+        highlightWidth: 2,
+        roundedViseme: 8,
+      },
+    },
+  },
+  {
+    id: 'dark',
+    name: '午夜霓虹',
+    data: {
+      id: 'dark',
+      name: '午夜霓虹',
+      bg: '#0f172a',
+      lineWidth: 6,
+      stroke: '#e2e8f0',
+      fill: '#1e293b',
+      body: { stroke: '#e2e8f0', lineWidth: 6 },
+      head: { stroke: '#38bdf8', fill: '#1e293b', lineWidth: 5 },
+      eye: { stroke: '#38bdf8', lineWidth: 4, gap: 22, minHeight: 1.5 },
+      mouth: {
+        stroke: '#0ea5e9',
+        lineWidth: 5.5,
+        fill: '#082f49',
+        innerFill: '#082f49',
+        toothFill: '#bae6fd',
+        toothCount: 4,
+        toothScale: 0.9,
+        widthScale: 0.95,
+        heightScale: 1.05,
+        cornerCurveBase: 0.04,
+        highlightStroke: '#38bdf8',
+        highlightWidth: 1.8,
+        roundedViseme: 10,
+      },
+    },
+  },
+  {
+    id: 'minimal',
+    name: '极简线条',
+    data: {
+      id: 'minimal',
+      name: '极简线条',
+      bg: '#fdfdfc',
+      lineWidth: 5,
+      stroke: '#1a1a1a',
+      fill: '#ffffff',
+      body: { stroke: '#1a1a1a', lineWidth: 5 },
+      head: { stroke: '#1a1a1a', fill: '#ffffff', lineWidth: 4.5 },
+      eye: { stroke: '#111111', lineWidth: 3, gap: 18, minHeight: 1.5 },
+      mouth: {
+        stroke: '#1f2937',
+        lineWidth: 4.5,
+        fill: '#111111',
+        innerFill: '#111111',
+        toothFill: '#f4f4f5',
+        toothCount: 4,
+        toothScale: 0.8,
+        widthScale: 0.9,
+        heightScale: 0.85,
+        cornerCurveBase: 0,
+        highlightStroke: '#52525b',
+        highlightWidth: 1.5,
+        roundedViseme: 7,
+      },
+    },
+  },
+];
+
+/** @type {Map<string, { id: string, name: string, data: import('./avatar.js').AvatarTheme }>} */
+const themeRegistry = new Map();
+/** @type {{ id: string, name: string, data: import('./avatar.js').AvatarTheme }[]} */
+let themeList = [];
+/** @type {Map<string, string>} */
+const themeDisplayMap = new Map();
+let defaultThemeId = 'classic';
+let manualThemeId = '';
+let activeThemeId = 'classic';
+
+const normalizeThemeId = (value, options = {}) => {
+  const allowEmpty = Boolean(options.allowEmpty);
+  const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (!raw) {
+    return allowEmpty ? '' : 'classic';
+  }
+  return THEME_ALIASES[raw] || raw;
+};
+
+const getThemeDisplayName = (themeId) => themeDisplayMap.get(themeId) || themeId;
+
+const persistManualThemeId = (themeId) => {
+  try {
+    if (themeId) {
+      window.localStorage?.setItem(THEME_STORAGE_KEY, themeId);
+    } else {
+      window.localStorage?.removeItem(THEME_STORAGE_KEY);
+    }
+  } catch (error) {
+    console.warn('[stickbot] 保存主题偏好失败', error);
+  }
+};
+
+const loadStoredManualThemeId = () => {
+  try {
+    const stored = window.localStorage?.getItem(THEME_STORAGE_KEY) || '';
+    return normalizeThemeId(stored, { allowEmpty: true });
+  } catch (error) {
+    console.warn('[stickbot] 读取主题偏好失败', error);
+    return '';
+  }
+};
+
+const updateThemeOptions = () => {
+  if (!themeSelect) return;
+  themeSelect.innerHTML = '';
+  const followOption = document.createElement('option');
+  followOption.value = '';
+  followOption.textContent = '跟随角色';
+  themeSelect.appendChild(followOption);
+  for (const entry of themeList) {
+    const option = document.createElement('option');
+    option.value = entry.id;
+    option.textContent = entry.name || entry.id;
+    themeSelect.appendChild(option);
+  }
+  themeSelect.disabled = themeList.length === 0;
+  themeSelect.value = manualThemeId ? manualThemeId : '';
+};
+
+const applyThemeClass = (themeId) => {
+  const body = document.body;
+  if (!body) {
+    return;
+  }
+  const target = themeId ? `theme-${themeId}` : 'theme-classic';
+  body.classList.forEach((cls) => {
+    if (cls.startsWith('theme-') && cls !== target) {
+      body.classList.remove(cls);
+    }
+  });
+  if (!body.classList.contains(target)) {
+    body.classList.add(target);
+  }
+};
+
+const applyThemeFromState = ({ skipManualUpdate = false } = {}) => {
+  const roleThemeId = activeRole?.theme ? normalizeThemeId(activeRole.theme) : '';
+  const desiredId = manualThemeId || roleThemeId || defaultThemeId;
+  const entry = themeRegistry.get(desiredId) || themeRegistry.get(defaultThemeId) || themeList[0] || null;
+  if (!entry) {
+    return;
+  }
+  activeThemeId = entry.id;
+  applyThemeClass(entry.id);
+  if (typeof avatar.setTheme === 'function') {
+    avatar.setTheme(entry.data);
+  }
+  if (hostStickBot && typeof hostStickBot.setTheme === 'function') {
+    hostStickBot.setTheme(entry.id);
+  }
+  if (!skipManualUpdate && themeSelect) {
+    themeSelect.value = manualThemeId ? entry.id : '';
+  }
+  updateRoleDisplay(activeRole);
+};
+
+const initializeThemes = (entries, defaultId) => {
+  themeRegistry.clear();
+  themeList = [];
+  themeDisplayMap.clear();
+  const seen = new Set();
+  for (const entry of entries) {
+    const normalizedId = normalizeThemeId(entry.id);
+    if (seen.has(normalizedId)) {
+      continue;
+    }
+    seen.add(normalizedId);
+    const name = typeof entry.name === 'string' && entry.name.trim() ? entry.name.trim() : normalizedId;
+    const data = cloneTheme(entry.data || {});
+    if (!data.id) {
+      data.id = normalizedId;
+    }
+    if (!data.name) {
+      data.name = name;
+    }
+    const prepared = { id: normalizedId, name, data };
+    themeList.push(prepared);
+    themeRegistry.set(normalizedId, prepared);
+    themeDisplayMap.set(normalizedId, name);
+  }
+  const normalizedDefault = normalizeThemeId(defaultId);
+  if (themeRegistry.has(normalizedDefault)) {
+    defaultThemeId = normalizedDefault;
+  }
+  if (manualThemeId && !themeRegistry.has(manualThemeId)) {
+    manualThemeId = '';
+    persistManualThemeId('');
+  }
+  updateThemeOptions();
+  applyThemeFromState({ skipManualUpdate: true });
+};
+
+const loadThemeManifest = async () => {
+  const candidates = [];
+  try {
+    candidates.push(new URL('../themes/manifest.json', window.location.href).toString());
+  } catch (error) {
+    // ignore
+  }
+  const serverCandidate = resolveServerUrl('/themes/manifest.json');
+  if (serverCandidate && !candidates.includes(serverCandidate)) {
+    candidates.push(serverCandidate);
+  }
+  for (const url of candidates) {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        continue;
+      }
+      const manifest = await response.json();
+      if (!manifest || !Array.isArray(manifest.themes)) {
+        continue;
+      }
+      const loaded = [];
+      for (const item of manifest.themes) {
+        const rawId = normalizeThemeId(item.id, { allowEmpty: false });
+        if (!rawId) {
+          continue;
+        }
+        const path = typeof item.path === 'string' ? item.path : '';
+        if (!path) {
+          continue;
+        }
+        try {
+          const themeUrl = new URL(path, url);
+          const themeResponse = await fetch(themeUrl.toString());
+          if (!themeResponse.ok) {
+            continue;
+          }
+          const themeData = await themeResponse.json();
+          loaded.push({
+            id: rawId,
+            name: typeof item.name === 'string' && item.name.trim() ? item.name.trim() : rawId,
+            data: themeData,
+          });
+        } catch (error) {
+          console.warn('[stickbot] 加载主题失败', error);
+        }
+      }
+      if (loaded.length > 0) {
+        const seen = new Set(loaded.map((entry) => entry.id));
+        for (const fallback of FALLBACK_THEME_ENTRIES) {
+          const normalizedId = normalizeThemeId(fallback.id);
+          if (!seen.has(normalizedId)) {
+            loaded.push({ id: normalizedId, name: fallback.name, data: fallback.data });
+            seen.add(normalizedId);
+          }
+        }
+        const manifestDefault = typeof manifest.default === 'string' ? manifest.default : defaultThemeId;
+        initializeThemes(loaded, manifestDefault);
+        return;
+      }
+    } catch (error) {
+      console.warn('[stickbot] 请求主题清单失败', error);
+    }
+  }
+};
+
 // 初始化渲染器
-const avatar = new BigMouthAvatar(canvas);
+manualThemeId = loadStoredManualThemeId();
+const avatar = new BigMouthAvatar(canvas, { theme: DEFAULT_THEME });
+initializeThemes(FALLBACK_THEME_ENTRIES, 'classic');
 avatar.start();
+loadThemeManifest().catch((error) => {
+  console.warn('[stickbot] 主题清单加载失败', error);
+});
 overlayInfo('stickbot 已就绪，优先使用服务端时间轴驱动。');
 
 // 口型信号
@@ -186,14 +524,14 @@ const sanitizeRole = (role, fallbackId) => {
   const id = typeof role?.id === 'string' && role.id.trim() ? role.id.trim() : fallbackId;
   const preset = role && typeof role.preset === 'object' && role.preset ? role.preset : {};
   const renderMode = typeof role?.renderMode === 'string' && role.renderMode ? role.renderMode : 'vector';
-  const theme = typeof role?.theme === 'string' && role.theme ? role.theme : 'classic';
+  const theme = normalizeThemeId(role?.theme);
   return {
     id,
     name: typeof role?.name === 'string' && role.name.trim() ? role.name.trim() : id,
     description: typeof role?.description === 'string' ? role.description : '',
     voice: typeof role?.voice === 'string' && role.voice ? role.voice : '',
     preset,
-    theme: theme.toLowerCase(),
+    theme,
     renderMode: renderMode.toLowerCase(),
   };
 };
@@ -207,28 +545,9 @@ const buildRoleMeta = (role) => {
     parts.push(`渲染: ${role.renderMode}`);
   }
   if (role?.theme) {
-    parts.push(`主题: ${role.theme}`);
+    parts.push(`主题: ${getThemeDisplayName(normalizeThemeId(role.theme))}`);
   }
   return parts.join(' · ');
-};
-
-const applyTheme = (themeId) => {
-  const body = document.body;
-  if (!body) {
-    return;
-  }
-  const target = themeId ? `theme-${themeId}` : 'theme-classic';
-  body.classList.forEach((cls) => {
-    if (cls.startsWith('theme-') && cls !== target) {
-      body.classList.remove(cls);
-    }
-  });
-  if (!body.classList.contains(target)) {
-    body.classList.add(target);
-  }
-  if (hostStickBot && typeof hostStickBot.setTheme === 'function') {
-    hostStickBot.setTheme(themeId);
-  }
 };
 
 const applyExpressionPreset = (preset) => {
@@ -278,7 +597,8 @@ const updateRoleDisplay = (role) => {
     roleDescription.textContent = text;
   }
   if (roleMeta) {
-    roleMeta.textContent = buildRoleMeta(role || null);
+    const displayRole = role ? { ...role, theme: activeThemeId } : role;
+    roleMeta.textContent = buildRoleMeta(displayRole || null);
   }
 };
 
@@ -296,8 +616,7 @@ const applyRole = async (role, options = {}) => {
   }
 
   applyExpressionPreset(activeRole.preset);
-  applyTheme(activeRole.theme);
-  updateRoleDisplay(activeRole);
+  applyThemeFromState();
 
   if (renderSelect) {
     renderSelect.value = activeRole.renderMode;
@@ -473,6 +792,21 @@ if (roleSelect) {
     if (selected) {
       await applyRole(selected);
     }
+  });
+}
+
+if (themeSelect) {
+  themeSelect.addEventListener('change', () => {
+    const value = themeSelect.value || '';
+    const normalized = normalizeThemeId(value, { allowEmpty: true });
+    if (!normalized) {
+      manualThemeId = '';
+      persistManualThemeId('');
+    } else {
+      manualThemeId = normalized;
+      persistManualThemeId(manualThemeId);
+    }
+    applyThemeFromState({ skipManualUpdate: true });
   });
 }
 

@@ -1,0 +1,38 @@
+{
+  "id": "classic",
+  "name": "经典紫调",
+  "bg": "#f5f5f5",
+  "lineWidth": 6,
+  "stroke": "#1f2937",
+  "fill": "#f3f4ff",
+  "body": {
+    "stroke": "#1f2937",
+    "lineWidth": 6
+  },
+  "head": {
+    "stroke": "#312e81",
+    "fill": "#f3f4ff",
+    "lineWidth": 5
+  },
+  "eye": {
+    "stroke": "#312e81",
+    "lineWidth": 4,
+    "gap": 20,
+    "minHeight": 2
+  },
+  "mouth": {
+    "stroke": "#7c3aed",
+    "lineWidth": 6,
+    "fill": "#4c1d95",
+    "innerFill": "#4c1d95",
+    "toothFill": "#ede9fe",
+    "toothCount": 6,
+    "toothScale": 1,
+    "widthScale": 1,
+    "heightScale": 1,
+    "cornerCurveBase": 0.1,
+    "highlightStroke": "#a855f7",
+    "highlightWidth": 2,
+    "roundedViseme": 9
+  }
+}

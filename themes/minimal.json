@@ -1,0 +1,38 @@
+{
+  "id": "minimal",
+  "name": "极简线条",
+  "bg": "#fdfdfc",
+  "lineWidth": 5,
+  "stroke": "#1a1a1a",
+  "fill": "#ffffff",
+  "body": {
+    "stroke": "#1a1a1a",
+    "lineWidth": 5
+  },
+  "head": {
+    "stroke": "#1a1a1a",
+    "fill": "#ffffff",
+    "lineWidth": 4.5
+  },
+  "eye": {
+    "stroke": "#111111",
+    "lineWidth": 3,
+    "gap": 18,
+    "minHeight": 1.5
+  },
+  "mouth": {
+    "stroke": "#1f2937",
+    "lineWidth": 4.5,
+    "fill": "#111111",
+    "innerFill": "#111111",
+    "toothFill": "#f4f4f5",
+    "toothCount": 4,
+    "toothScale": 0.8,
+    "widthScale": 0.9,
+    "heightScale": 0.85,
+    "cornerCurveBase": 0,
+    "highlightStroke": "#52525b",
+    "highlightWidth": 1.5,
+    "roundedViseme": 7
+  }
+}

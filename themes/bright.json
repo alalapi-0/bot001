@@ -1,0 +1,38 @@
+{
+  "id": "bright",
+  "name": "暖阳活力",
+  "bg": "#fff7ed",
+  "lineWidth": 6,
+  "stroke": "#7c2d12",
+  "fill": "#fffaf0",
+  "body": {
+    "stroke": "#7c2d12",
+    "lineWidth": 6
+  },
+  "head": {
+    "stroke": "#9a3412",
+    "fill": "#fffaf0",
+    "lineWidth": 5
+  },
+  "eye": {
+    "stroke": "#9a3412",
+    "lineWidth": 4,
+    "gap": 22,
+    "minHeight": 2
+  },
+  "mouth": {
+    "stroke": "#ea580c",
+    "lineWidth": 6,
+    "fill": "#c2410c",
+    "innerFill": "#c2410c",
+    "toothFill": "#fffbeb",
+    "toothCount": 5,
+    "toothScale": 1.1,
+    "widthScale": 1.05,
+    "heightScale": 1.1,
+    "cornerCurveBase": 0.08,
+    "highlightStroke": "#fb923c",
+    "highlightWidth": 2,
+    "roundedViseme": 8
+  }
+}

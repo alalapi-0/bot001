@@ -105,6 +105,40 @@
   box-shadow: 0 16px 30px rgba(17, 24, 39, 0.18);
 }
 
+.container.theme-classic {
+  background: #f5f5f5;
+  color: #1f2937;
+}
+
+.container.theme-classic .panel {
+  background: #ffffff;
+  color: #1f2937;
+  box-shadow: 0 14px 30px rgba(79, 70, 229, 0.16);
+}
+
+.container.theme-classic .picker-value {
+  background: #ede9fe;
+  color: #312e81;
+}
+
+.container.theme-classic .role-description,
+.container.theme-classic .role-meta,
+.container.theme-classic .info,
+.container.theme-classic .hint {
+  color: #4338ca;
+}
+
+.container.theme-classic .avatar-canvas {
+  background: #f3f4ff;
+  box-shadow: 0 16px 32px rgba(99, 102, 241, 0.2);
+}
+
+.container.theme-classic .subtitle-bar {
+  background: linear-gradient(135deg, #4c1d95, #7c3aed);
+  color: #ede9fe;
+  box-shadow: 0 18px 36px rgba(124, 58, 237, 0.25);
+}
+
 .container.theme-bright {
   background: #fff7ed;
   color: #7c2d12;
@@ -139,70 +173,70 @@
   box-shadow: 0 16px 32px rgba(234, 88, 12, 0.22);
 }
 
-.container.theme-pastel {
-  background: #f3e8ff;
-  color: #4c1d95;
-}
-
-.container.theme-pastel .panel {
-  background: #fdf4ff;
-  color: #4c1d95;
-  box-shadow: 0 14px 30px rgba(147, 51, 234, 0.18);
-}
-
-.container.theme-pastel .picker-value {
-  background: #f8e8ff;
-  color: #6d28d9;
-}
-
-.container.theme-pastel .role-description,
-.container.theme-pastel .role-meta,
-.container.theme-pastel .info,
-.container.theme-pastel .hint {
-  color: #7c3aed;
-}
-
-.container.theme-pastel .avatar-canvas {
-  background: #fdf4ff;
-  box-shadow: 0 14px 28px rgba(147, 51, 234, 0.16);
-}
-
-.container.theme-pastel .subtitle-bar {
-  background: linear-gradient(135deg, #a855f7, #7c3aed);
-  color: #fdf4ff;
-  box-shadow: 0 16px 32px rgba(124, 58, 237, 0.22);
-}
-
-.container.theme-noir {
+.container.theme-dark {
   background: #0f172a;
   color: #e2e8f0;
 }
 
-.container.theme-noir .panel {
+.container.theme-dark .panel {
   background: #1e293b;
   color: #e2e8f0;
   box-shadow: 0 18px 36px rgba(15, 23, 42, 0.6);
 }
 
-.container.theme-noir .picker-value {
+.container.theme-dark .picker-value {
   background: #1f2937;
-  color: #bae6fd;
+  color: #38bdf8;
 }
 
-.container.theme-noir .role-description,
-.container.theme-noir .role-meta,
-.container.theme-noir .info,
-.container.theme-noir .hint {
+.container.theme-dark .role-description,
+.container.theme-dark .role-meta,
+.container.theme-dark .info,
+.container.theme-dark .hint {
   color: #94a3b8;
 }
 
-.container.theme-noir .avatar-canvas {
+.container.theme-dark .avatar-canvas {
   background: #1e293b;
   box-shadow: 0 18px 38px rgba(15, 23, 42, 0.6);
 }
 
-.container.theme-noir .subtitle-bar {
+.container.theme-dark .subtitle-bar {
   background: linear-gradient(135deg, #0ea5e9, #0369a1);
   color: #0f172a;
   box-shadow: 0 18px 38px rgba(14, 165, 233, 0.28);
+}
+
+.container.theme-minimal {
+  background: #fdfdfc;
+  color: #1f2937;
+}
+
+.container.theme-minimal .panel {
+  background: #ffffff;
+  color: #1f2937;
+  box-shadow: 0 12px 26px rgba(17, 24, 39, 0.12);
+}
+
+.container.theme-minimal .picker-value {
+  background: #f5f5f4;
+  color: #1a1a1a;
+}
+
+.container.theme-minimal .role-description,
+.container.theme-minimal .role-meta,
+.container.theme-minimal .info,
+.container.theme-minimal .hint {
+  color: #4b5563;
+}
+
+.container.theme-minimal .avatar-canvas {
+  background: #ffffff;
+  box-shadow: 0 12px 24px rgba(17, 24, 39, 0.12);
+}
+
+.container.theme-minimal .subtitle-bar {
+  background: linear-gradient(135deg, #1f2937, #4b5563);
+  color: #f8fafc;
+  box-shadow: 0 16px 30px rgba(30, 41, 59, 0.18);
 }

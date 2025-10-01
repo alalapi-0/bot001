@@ -87,6 +87,49 @@ npm run dev
 
 可按需增加更多角色（至少保留一个 `default`），修改后无需重启前端即可生效。
 
+## 主题系统
+
+- 根目录 `themes/` 存放纯 JSON 主题与 `manifest.json`：
+  - `manifest.json` 指定默认主题 ID，并列出每个主题文件的相对路径；
+  - 单个主题 JSON 支持如下字段：
+
+    ```json
+    {
+      "id": "dark",
+      "name": "午夜霓虹",
+      "bg": "#0f172a",
+      "stroke": "#e2e8f0",
+      "fill": "#1e293b",
+      "lineWidth": 6,
+      "body": { "stroke": "#e2e8f0", "lineWidth": 6 },
+      "head": { "stroke": "#38bdf8", "fill": "#1e293b", "lineWidth": 5 },
+      "eye": { "stroke": "#38bdf8", "lineWidth": 4, "gap": 22, "minHeight": 1.5 },
+      "mouth": {
+        "stroke": "#0ea5e9",
+        "lineWidth": 5.5,
+        "fill": "#082f49",
+        "innerFill": "#082f49",
+        "toothFill": "#bae6fd",
+        "toothCount": 4,
+        "toothScale": 0.9,
+        "widthScale": 0.95,
+        "heightScale": 1.05,
+        "cornerCurveBase": 0.04,
+        "highlightStroke": "#38bdf8",
+        "highlightWidth": 1.8,
+        "roundedViseme": 10
+      }
+    }
+    ```
+
+  - `bg` 为画布背景色，`stroke`/`fill`/`lineWidth` 提供全局默认描边与线宽；
+  - `body`、`head`、`eye` 可覆盖对应部位的颜色与线宽；
+  - `mouth` 控制嘴部细节，包括宽高缩放、牙齿数量/颜色、嘴角基础弧度、圆唇高光、指定与高光相关的 `roundedViseme`；
+  - 数值字段会在运行时自动夹紧（如线宽至少 1px、缩放范围 0.4~2.2），避免异常配置导致绘制溢出。
+- Express 服务端会自动通过 `/themes` 暴露这些 JSON 文件，网页端与小程序首先读取 `manifest.json`，再按 `path` 拉取主题内容。
+- 主题选择优先级：**页面手动选择 > 角色档案默认值 > Manifest 默认主题**，两端的渲染逻辑保持一致；若本地缓存的主题已被移除，将回退到默认主题并清除缓存。
+- 新增主题只需在 `themes/` 中放置 JSON 文件并更新 `manifest.json`，无需重新构建即可在 web 与 weapp 端生效。
+
 ## 语义表情触发词典
 
 - `packages/stickbot-core/src/emotion/semantic-triggers.ts` 内置 `deriveSemanticTimelines`，会根据文本、`estimateSentiment` 结果与 `wordTimeline` 推导 `emoteTimeline`、`gestureTimeline`；

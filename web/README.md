@@ -25,6 +25,16 @@
 - 档案存放于仓库根目录 `roles/`，可随时新增/修改，浏览器会在刷新后读取；
 - 浏览器会将最近一次选择保存在 `localStorage`，再次进入页面时自动恢复。
 
+### 主题 JSON 与扩展
+
+- 网页主题配置统一放置在仓库根目录 `themes/` 下，由 `manifest.json` 描述默认主题与各主题文件：
+  - `manifest.json` 字段包括 `default`（默认主题 ID）与 `themes` 数组，数组项需包含 `id`、`name` 与 `path`；
+  - 主题 JSON 支持 `bg`、`stroke`、`fill`、`lineWidth` 等顶层样式，以及 `body`、`head`、`eye`、`mouth` 的子对象；
+  - `mouth` 可进一步指定 `toothCount`、`toothScale`、`widthScale`、`heightScale`、`cornerCurveBase`、`highlightStroke`、`highlightWidth` 与 `roundedViseme` 等细节；
+  - 数值字段会在运行时自动归一并夹紧，非法输入将回退到默认主题对应值。
+- `main.js` 会先加载 `manifest.json`，再按 `path` 拉取主题 JSON 并注册到选择器；手动选择的主题写入 `localStorage('stickbot:manual-theme')`，优先级高于角色默认。
+- 若主题文件删除或字段缺失，页面会自动回退到 `manifest` 默认主题，并清除失效的本地偏好。
+
 ## 口型驱动优先级
 
 1. **服务端时间轴**：`/tts` 返回 `mouthTimeline` 时，`main.js` 会创建 `<audio>` 元素播放 `audioUrl`，同时调用 `MouthSignal.playTimeline`，以 ~80Hz 的关键帧驱动嘴唇开合。
