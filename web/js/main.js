@@ -12,6 +12,7 @@ import {
   playWithAnalyser,
   resolveServerUrl,
 } from './lipsync.js';
+import { DEFAULT_AUTO_GAIN_CONFIG } from './auto-gain.js';
 
 /**
  * DOM 引用。
@@ -30,6 +31,7 @@ const providerSelect = /** @type {HTMLSelectElement} */ (document.getElementById
 const providerHint = document.getElementById('provider-hint');
 const renderSelect = /** @type {HTMLSelectElement} */ (document.getElementById('render-mode'));
 const visemeDisplay = document.getElementById('viseme-display');
+const autoGainToggle = /** @type {HTMLInputElement} */ (document.getElementById('auto-gain-toggle'));
 
 // 初始化渲染器
 const avatar = new BigMouthAvatar(canvas);
@@ -45,6 +47,48 @@ mouthSignal.subscribe((frame) => {
     visemeDisplay.textContent = `viseme ${Math.round(frame.visemeId)} · ${frame.phoneme}`;
   }
 });
+
+const AUTO_GAIN_STORAGE_KEY = 'stickbot:auto-gain';
+
+const loadAutoGainPreference = () => {
+  if (!autoGainToggle) {
+    return { enabled: true, config: { ...DEFAULT_AUTO_GAIN_CONFIG } };
+  }
+  let enabled = true;
+  let config = { ...DEFAULT_AUTO_GAIN_CONFIG };
+  try {
+    const raw = window.localStorage?.getItem(AUTO_GAIN_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed?.enabled === 'boolean') {
+        enabled = parsed.enabled;
+      }
+      if (parsed?.config && typeof parsed.config === 'object') {
+        config = { ...config, ...parsed.config };
+      }
+    }
+  } catch (error) {
+    console.warn('[stickbot] 读取自动增益设置失败', error);
+  }
+  autoGainToggle.checked = enabled;
+  return { enabled, config };
+};
+
+let autoGainPreference = loadAutoGainPreference();
+
+const applyAutoGainPreference = (enabled, config) => {
+  autoGainPreference = { enabled, config };
+  mouthSignal.setAutoGain(enabled, config);
+};
+
+if (autoGainToggle) {
+  applyAutoGainPreference(autoGainPreference.enabled, autoGainPreference.config);
+  autoGainToggle.addEventListener('change', () => {
+    applyAutoGainPreference(autoGainToggle.checked, autoGainPreference.config);
+  });
+} else {
+  mouthSignal.setAutoGain(true, autoGainPreference.config);
+}
 
 /** @type {AbortController|null} */
 let currentAbort = null;

@@ -4,6 +4,8 @@
  *              第二轮中优先使用服务端返回的 mouthTimeline，仍保留 Web Speech 与音量包络作为兜底。
  */
 
+import { AutoGainProcessor, DEFAULT_AUTO_GAIN_CONFIG } from './auto-gain.js';
+
 /**
  * @typedef {Object} MouthFrame
  * @property {number} value - mouth 数值，范围 [0,1]。
@@ -33,6 +35,8 @@ const SIGNAL_CONFIG = {
   decay: 0.9, // 逐帧衰减系数
   minValue: 0.04, // 避免完全闭嘴造成角色僵硬
 };
+
+const AUTO_GAIN_STORAGE_KEY = 'stickbot:auto-gain';
 
 /**
  * 计算服务端基础地址。默认指向与前端同主机的 8787 端口，亦可通过 window.STICKBOT_SERVER_ORIGIN 覆盖。
@@ -94,6 +98,10 @@ export class MouthSignal {
     this.analyserBuffer = null;
     /** @type {TimelinePlayback|null} */
     this.timelinePlayback = null;
+    /** @type {boolean} */
+    this.autoGainEnabled = false;
+    /** @type {{ windowSec: number, targetRMS: number, floor: number, ceil: number, smoothing?: number }} */
+    this.autoGainConfig = { ...DEFAULT_AUTO_GAIN_CONFIG };
   }
 
   /**
@@ -235,9 +243,10 @@ export class MouthSignal {
    * @param {() => number} clock - 返回当前播放进度（秒）的函数，例如 AudioElement.currentTime。
    */
   playTimeline(timeline, clock) {
+    const autoGain = this.autoGainEnabled ? this.autoGainConfig : null;
     this.timelinePlayback = new TimelinePlayback(timeline, clock, (value, visemeId, phoneme) => {
       this.setFrame({ value, visemeId, phoneme });
-    });
+    }, autoGain);
   }
 
   /**
@@ -246,6 +255,29 @@ export class MouthSignal {
   emit() {
     for (const fn of this.subscribers) {
       fn(this.frame);
+    }
+  }
+
+  /**
+   * 设置自动增益状态。
+   * @param {boolean} enabled - 是否启用。
+   * @param {{ windowSec?: number, targetRMS?: number, floor?: number, ceil?: number, smoothing?: number }} [config] - 可选配置。
+   */
+  setAutoGain(enabled, config = {}) {
+    this.autoGainEnabled = Boolean(enabled);
+    this.autoGainConfig = { ...DEFAULT_AUTO_GAIN_CONFIG, ...config };
+    if (this.timelinePlayback) {
+      this.timelinePlayback.setAutoGain(this.autoGainEnabled ? this.autoGainConfig : null);
+    }
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        window.localStorage.setItem(
+          AUTO_GAIN_STORAGE_KEY,
+          JSON.stringify({ enabled: this.autoGainEnabled, config: this.autoGainConfig }),
+        );
+      } catch (error) {
+        console.warn('[stickbot] 保存自动增益状态失败', error);
+      }
     }
   }
 }
@@ -258,13 +290,15 @@ class TimelinePlayback {
    * @param {TimelinePoint[]} timeline - mouth 时间轴。
    * @param {() => number} clock - 播放进度函数，返回秒。
    * @param {(value: number, visemeId: number, phoneme: string) => void} onFrame - 帧更新回调。
+   * @param {{ windowSec?: number, targetRMS?: number, floor?: number, ceil?: number, smoothing?: number }|null} autoGain - 自动增益配置。
    */
-  constructor(timeline, clock, onFrame) {
+  constructor(timeline, clock, onFrame, autoGain = null) {
     this.timeline = timeline;
     this.clock = clock;
     this.onFrame = onFrame;
     this.duration = timeline.length > 0 ? timeline[timeline.length - 1].t : 0;
     this.index = 0;
+    this.autoGain = autoGain ? new AutoGainProcessor(timeline, autoGain) : null;
   }
 
   /**
@@ -292,11 +326,26 @@ class TimelinePlayback {
     const prev = this.timeline[this.index - 1] ?? next;
     const span = Math.max(next.t - prev.t, 1e-6);
     const ratio = (time - prev.t) / span;
-    const value = prev.v + (next.v - prev.v) * ratio;
+    let value = prev.v + (next.v - prev.v) * ratio;
     const visemeId = ratio > 0.5 ? next.visemeId : prev.visemeId;
     const phoneme = ratio > 0.5 ? (next.phoneme || 'blend') : (prev.phoneme || 'blend');
+    if (this.autoGain) {
+      value = this.autoGain.apply(time, value).value;
+    }
     this.onFrame(value, visemeId, phoneme);
     return false;
+  }
+
+  /**
+   * 更新自动增益配置。
+   * @param {{ windowSec?: number, targetRMS?: number, floor?: number, ceil?: number, smoothing?: number }|null} autoGain - 自动增益配置。
+   */
+  setAutoGain(autoGain) {
+    if (autoGain) {
+      this.autoGain = new AutoGainProcessor(this.timeline, autoGain);
+    } else {
+      this.autoGain = null;
+    }
   }
 }
 
