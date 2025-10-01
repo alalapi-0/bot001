@@ -267,10 +267,12 @@ export class TimelinePlayer {
       return { ...DEFAULT_EXPRESSION };
     }
     const result: AvatarExpressionParams = { ...DEFAULT_EXPRESSION };
+    const defaultExpressionRecord = DEFAULT_EXPRESSION as unknown as Record<string, number>;
+    const expressionRecord = result as unknown as Record<string, number>;
     for (const [key, frames] of this.expressionTimeline) {
-      const defaultValue = (DEFAULT_EXPRESSION as Record<string, number>)[key] ?? 0;
+      const defaultValue = defaultExpressionRecord[key] ?? 0;
       const value = sampleKeyframes(frames, time, defaultValue);
-      (result as Record<string, number>)[key] = value;
+      expressionRecord[key] = value;
     }
     return clampExpressionState(result);
   }

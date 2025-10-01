@@ -69,6 +69,28 @@ npm run dev
 - **前端**：纯静态资源，可部署到 Netlify、Vercel、GitHub Pages 或任意静态托管服务。
 - **服务端**：Express 应用可部署到 Render、Railway、Fly.io、Vercel Functions、阿里云函数计算等。部署时请通过 `.env` 配置真实 TTS/LLM 端点。
 
+## CDN 接入示例
+
+```html
+<!-- 通过 ESM 模块方式拉取 core 包 -->
+<script type="module">
+  import { BigMouthAvatar } from 'https://cdn.jsdelivr.net/npm/@stickbot/core/dist/stickbot-core.esm.js';
+
+  const canvas = document.querySelector('#stickbot-canvas');
+  const avatar = new BigMouthAvatar(canvas);
+  avatar.start();
+  avatar.setMouthFrame({ value: 0.4, visemeId: 4, phoneme: 'E' });
+</script>
+
+<!-- 通过 IIFE 方式拉取 web component 包 -->
+<script src="https://cdn.jsdelivr.net/npm/@stickbot/webcomp/dist/stickbot-webcomp.global.js"></script>
+<script>
+  if (!customElements.get('stick-bot')) {
+    customElements.define('stick-bot', StickBotComponent);
+  }
+</script>
+```
+
 ## 安全与合规提示
 
 - 不要在前端硬编码任何私有 API Key。将敏感信息存储在服务端 `.env` 中，并通过代理接口调用。
