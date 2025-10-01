@@ -44,6 +44,7 @@
         padding: 24px;
         gap: 24px;
         box-sizing: border-box;
+        position: relative;
       }
 
       canvas {
@@ -271,6 +272,72 @@
         color: var(--hint-text);
       }
 
+      .diagnostics-overlay {
+        position: absolute;
+        top: 16px;
+        left: 16px;
+        min-width: 240px;
+        max-width: 320px;
+        padding: 12px 14px;
+        border-radius: 12px;
+        background: rgba(15, 23, 42, 0.82);
+        color: #f8fafc;
+        box-shadow: 0 18px 36px rgba(15, 23, 42, 0.35);
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        font-size: 12px;
+        line-height: 1.5;
+        pointer-events: none;
+        opacity: 0;
+        transform: translateY(-6px);
+        transition: opacity 0.2s ease, transform 0.2s ease;
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+      }
+
+      .diagnostics-overlay[data-active='true'] {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      .diagnostics-overlay h2 {
+        margin: 0 0 6px 0;
+        font-size: 13px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .diagnostics-overlay .diagnostics-badge {
+        padding: 2px 6px;
+        border-radius: 6px;
+        background: rgba(248, 250, 252, 0.15);
+        font-size: 11px;
+        font-weight: 500;
+      }
+
+      .diagnostics-overlay dl {
+        margin: 0;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 6px 12px;
+      }
+
+      .diagnostics-overlay dt {
+        opacity: 0.72;
+      }
+
+      .diagnostics-overlay dd {
+        margin: 0;
+        font-family: ui-monospace, SFMono-Regular, SFMono, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+        font-size: 12px;
+      }
+
+      .diagnostics-overlay .diagnostics-footnote {
+        margin-top: 8px;
+        opacity: 0.7;
+      }
+
       body.theme-classic {
         --page-bg: #f5f5f5;
         --page-text: #1f2937;
@@ -363,6 +430,52 @@
   <body class="theme-classic">
     <main>
       <canvas id="stickbot-canvas" width="480" height="480"></canvas>
+      <div
+        id="diagnostics-overlay"
+        class="diagnostics-overlay"
+        data-active="false"
+        aria-hidden="true"
+      >
+        <h2>
+          诊断叠层
+          <span class="diagnostics-badge" data-diag="bufferStatus">空闲</span>
+        </h2>
+        <dl>
+          <div>
+            <dt>同步来源</dt>
+            <dd data-diag="syncSource">空闲</dd>
+          </div>
+          <div>
+            <dt>捕捉模式</dt>
+            <dd data-diag="captureMode">关闭</dd>
+          </div>
+          <div>
+            <dt>mouth</dt>
+            <dd data-diag="mouthValue">0.00</dd>
+          </div>
+          <div>
+            <dt>EMA</dt>
+            <dd data-diag="emaValue">0.00</dd>
+          </div>
+          <div>
+            <dt>viseme</dt>
+            <dd data-diag="visemeValue">#0 · idle</dd>
+          </div>
+          <div>
+            <dt>段索引</dt>
+            <dd data-diag="segmentIndex">0 / 0</dd>
+          </div>
+          <div>
+            <dt>已缓冲</dt>
+            <dd data-diag="preparedSegments">0</dd>
+          </div>
+          <div>
+            <dt>预取中</dt>
+            <dd data-diag="prefetchSegments">0</dd>
+          </div>
+        </dl>
+        <p class="diagnostics-footnote" data-diag="extraInfo">等待音频或摄像头驱动。</p>
+      </div>
       <section class="controls">
         <h1 style="margin: 0">stickbot 控制面板</h1>
         <textarea id="speech-text" placeholder="请输入要朗读的文本">你好，我是 stickbot。今天我们一起练习口型同步！</textarea>
@@ -414,6 +527,11 @@
           <small id="webcam-status" class="plugin-status"
             >默认关闭，启用后浏览器会请求摄像头权限。加载 faceMesh 库后可获得更稳定的估计。</small
           >
+          <label>
+            <input type="checkbox" id="diagnostics-toggle" />
+            开启诊断叠层
+          </label>
+          <small class="plugin-status">展示 mouth、viseme、时间轴段缓冲等实时状态，便于排障。</small>
         </div>
         <div class="slider-group">
           <span>语速：<span id="rate-display">1.0</span></span>
