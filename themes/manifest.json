@@ -1,0 +1,9 @@
+{
+  "default": "classic",
+  "themes": [
+    { "id": "classic", "name": "经典紫调", "path": "./classic.json" },
+    { "id": "bright", "name": "暖阳活力", "path": "./bright.json" },
+    { "id": "dark", "name": "午夜霓虹", "path": "./dark.json" },
+    { "id": "minimal", "name": "极简线条", "path": "./minimal.json" }
+  ]
+}

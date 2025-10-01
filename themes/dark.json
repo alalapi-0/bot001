@@ -1,0 +1,38 @@
+{
+  "id": "dark",
+  "name": "午夜霓虹",
+  "bg": "#0f172a",
+  "lineWidth": 6,
+  "stroke": "#e2e8f0",
+  "fill": "#1e293b",
+  "body": {
+    "stroke": "#e2e8f0",
+    "lineWidth": 6
+  },
+  "head": {
+    "stroke": "#38bdf8",
+    "fill": "#1e293b",
+    "lineWidth": 5
+  },
+  "eye": {
+    "stroke": "#38bdf8",
+    "lineWidth": 4,
+    "gap": 22,
+    "minHeight": 1.5
+  },
+  "mouth": {
+    "stroke": "#0ea5e9",
+    "lineWidth": 5.5,
+    "fill": "#082f49",
+    "innerFill": "#082f49",
+    "toothFill": "#bae6fd",
+    "toothCount": 4,
+    "toothScale": 0.9,
+    "widthScale": 0.95,
+    "heightScale": 1.05,
+    "cornerCurveBase": 0.04,
+    "highlightStroke": "#38bdf8",
+    "highlightWidth": 1.8,
+    "roundedViseme": 10
+  }
+}

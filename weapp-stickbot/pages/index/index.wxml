@@ -22,6 +22,12 @@
         <view class="picker-value">{{renderModes[renderModeIndex]}}</view>
       </picker>
     </view>
+    <view class="selector">
+      <text class="label">主题风格</text>
+      <picker mode="selector" range="{{themeNames}}" value="{{themeIndex}}" bindchange="onThemeChange">
+        <view class="picker-value">{{themeNames.length ? themeNames[themeIndex] : ''}}</view>
+      </picker>
+    </view>
     <view class="switch-row">
       <text class="label">自动增益</text>
       <switch checked="{{autoGainEnabled}}" bindchange="onAutoGainToggle"></switch>

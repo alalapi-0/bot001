@@ -19,6 +19,19 @@
 - 当前选择会写入 `wx.setStorageSync('stickbot:role-profile')`，下次打开自动恢复；
 - 若服务端暂未提供档案，则回退到仓库内置的 `default/energetic/soft` 示例，可在 `roles/` 中自由增删。
 
+## 主题 JSON 与手动切换
+
+- 小程序与网页共用根目录 `themes/manifest.json` 与 `themes/*.json`：
+  - `manifest.json` 提供默认主题 ID 与各主题文件路径；
+  - 主题 JSON 支持 `bg`、`stroke`、`fill`、`lineWidth` 以及 `body`、`head`、`eye`、`mouth` 的细化字段；
+  - `mouth` 字段可配置牙齿数量/颜色、宽高缩放、嘴角基准弧度、圆唇高光以及 `roundedViseme` 对应的高光口型；
+  - 超出合理范围的数值会被运行时夹紧，例如线宽至少 1 像素、缩放范围 0.4~2.2。
+- 首页新增“主题风格”选择器：
+  - 手动选择的主题写入 `wx.setStorageSync('stickbot:manual-theme')`，优先级高于角色档案内的 `theme` 字段；
+  - 选择“跟随角色”时会清除手动偏好，回退到角色默认或 `manifest` 默认主题；
+  - 若本地缓存主题在 manifest 中已不存在，页面会自动回退到默认主题并移除缓存。
+- 服务端启动后会通过 `/themes` 静态路由暴露所有主题 JSON，真机调试需保证域名在微信后台合法域名列表中。
+
 ## 使用步骤
 
 1. 在小程序管理后台添加合法域名（开发环境可勾选“开发阶段忽略”），确保包含 `http://localhost:8787` 或部署地址。

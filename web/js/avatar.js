@@ -29,6 +29,124 @@ export const DEFAULT_CONFIG = {
 };
 
 /**
+ * @typedef {Object} AvatarTheme
+ * @property {string} [id]
+ * @property {string} [name]
+ * @property {string} [bg]
+ * @property {string} [stroke]
+ * @property {string} [fill]
+ * @property {number} [lineWidth]
+ * @property {{ stroke?: string, lineWidth?: number }} [body]
+ * @property {{ stroke?: string, fill?: string, lineWidth?: number }} [head]
+ * @property {{ stroke?: string, lineWidth?: number, gap?: number, minHeight?: number }} [eye]
+ * @property {{ stroke?: string, lineWidth?: number, fill?: string, innerFill?: string, toothFill?: string, toothCount?: number, toothScale?: number, widthScale?: number, heightScale?: number, cornerCurveBase?: number, highlightStroke?: string, highlightWidth?: number, roundedViseme?: number }} [mouth]
+ */
+
+/**
+ * @typedef {Object} AvatarThemeResolved
+ * @property {string} [id]
+ * @property {string} [name]
+ * @property {string} bg
+ * @property {{ stroke: string, lineWidth: number }} body
+ * @property {{ stroke: string, fill: string, lineWidth: number }} head
+ * @property {{ stroke: string, lineWidth: number, gap: number, minHeight: number }} eye
+ * @property {{ stroke: string, lineWidth: number, fill: string, innerFill: string, toothFill: string, toothCount: number, toothScale: number, widthScale: number, heightScale: number, cornerCurveBase: number, highlightStroke: string, highlightWidth: number, roundedViseme: number }} mouth
+ */
+
+const parseNumber = (value, fallback) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
+};
+
+const parseColor = (value, fallback) => (typeof value === 'string' && value.trim() ? value : fallback);
+
+const BASE_THEME = {
+  id: 'classic',
+  name: '经典紫调',
+  bg: '#f5f5f5',
+  body: { stroke: '#1f2937', lineWidth: 6 },
+  head: { stroke: '#312e81', fill: '#f3f4ff', lineWidth: 5 },
+  eye: { stroke: '#312e81', lineWidth: 4, gap: 20, minHeight: 2 },
+  mouth: {
+    stroke: '#7c3aed',
+    lineWidth: 6,
+    fill: '#4c1d95',
+    innerFill: '#4c1d95',
+    toothFill: '#ede9fe',
+    toothCount: 6,
+    toothScale: 1,
+    widthScale: 1,
+    heightScale: 1,
+    cornerCurveBase: 0.1,
+    highlightStroke: '#a855f7',
+    highlightWidth: 2,
+    roundedViseme: 9,
+  },
+};
+
+/** 默认主题。 */
+export const DEFAULT_THEME = BASE_THEME;
+
+const resolveTheme = (theme) => {
+  if (!theme) {
+    return JSON.parse(JSON.stringify(BASE_THEME));
+  }
+
+  const bodyStroke = parseColor(theme.body?.stroke ?? theme.stroke, BASE_THEME.body.stroke);
+  const bodyWidth = Math.max(1, parseNumber(theme.body?.lineWidth ?? theme.lineWidth, BASE_THEME.body.lineWidth));
+
+  const headStroke = parseColor(theme.head?.stroke ?? theme.stroke, BASE_THEME.head.stroke);
+  const headFill = parseColor(theme.head?.fill ?? theme.fill, BASE_THEME.head.fill);
+  const headWidth = Math.max(1, parseNumber(theme.head?.lineWidth ?? theme.lineWidth, BASE_THEME.head.lineWidth));
+
+  const eyeStroke = parseColor(theme.eye?.stroke ?? theme.stroke, BASE_THEME.eye.stroke);
+  const eyeWidth = Math.max(1, parseNumber(theme.eye?.lineWidth, BASE_THEME.eye.lineWidth));
+  const eyeGap = Math.max(10, parseNumber(theme.eye?.gap, BASE_THEME.eye.gap));
+  const eyeMinHeight = Math.max(1, parseNumber(theme.eye?.minHeight, BASE_THEME.eye.minHeight));
+
+  const mouthStroke = parseColor(theme.mouth?.stroke ?? theme.stroke, BASE_THEME.mouth.stroke);
+  const mouthLineWidth = Math.max(1, parseNumber(theme.mouth?.lineWidth ?? theme.lineWidth, BASE_THEME.mouth.lineWidth));
+  const mouthFill = parseColor(theme.mouth?.fill ?? theme.fill, BASE_THEME.mouth.fill);
+  const mouthInner = parseColor(theme.mouth?.innerFill ?? theme.mouth?.fill ?? theme.fill, BASE_THEME.mouth.innerFill);
+  const toothFill = parseColor(theme.mouth?.toothFill, BASE_THEME.mouth.toothFill);
+  const toothCount = Math.max(1, Math.round(parseNumber(theme.mouth?.toothCount, BASE_THEME.mouth.toothCount)));
+  const toothScale = Math.min(2.2, Math.max(0.2, parseNumber(theme.mouth?.toothScale, BASE_THEME.mouth.toothScale)));
+  const widthScale = Math.min(2.2, Math.max(0.4, parseNumber(theme.mouth?.widthScale, BASE_THEME.mouth.widthScale)));
+  const heightScale = Math.min(2.2, Math.max(0.4, parseNumber(theme.mouth?.heightScale, BASE_THEME.mouth.heightScale)));
+  const cornerBase = clamp(parseNumber(theme.mouth?.cornerCurveBase, BASE_THEME.mouth.cornerCurveBase), -1, 1);
+  const highlightStroke = parseColor(
+    theme.mouth?.highlightStroke ?? theme.mouth?.stroke ?? theme.stroke,
+    BASE_THEME.mouth.highlightStroke,
+  );
+  const highlightWidth = Math.max(0, parseNumber(theme.mouth?.highlightWidth, BASE_THEME.mouth.highlightWidth));
+  const roundedViseme = Math.max(0, Math.round(parseNumber(theme.mouth?.roundedViseme, BASE_THEME.mouth.roundedViseme)));
+
+  return {
+    id: typeof theme.id === 'string' ? theme.id : BASE_THEME.id,
+    name: typeof theme.name === 'string' ? theme.name : BASE_THEME.name,
+    bg: parseColor(theme.bg, BASE_THEME.bg),
+    body: { stroke: bodyStroke, lineWidth: bodyWidth },
+    head: { stroke: headStroke, fill: headFill, lineWidth: headWidth },
+    eye: { stroke: eyeStroke, lineWidth: eyeWidth, gap: eyeGap, minHeight: eyeMinHeight },
+    mouth: {
+      stroke: mouthStroke,
+      lineWidth: mouthLineWidth,
+      fill: mouthFill,
+      innerFill: mouthInner,
+      toothFill,
+      toothCount,
+      toothScale,
+      widthScale,
+      heightScale,
+      cornerCurveBase: cornerBase,
+      highlightStroke,
+      highlightWidth,
+      roundedViseme,
+    },
+  };
+};
+
+/**
  * 对数值进行夹紧。
  * @param {number} value - 原始数值。
  * @param {number} min - 最小值。
@@ -65,20 +183,27 @@ const randomBlinkTime = (range) => {
  */
 
 /**
+ * @typedef {Partial<AvatarConfig> & { theme?: AvatarTheme }} AvatarInitOptions
+ */
+
+/**
  * BigMouthAvatar 负责根据 mouth 值绘制火柴人，支持矢量与 Sprite 模式。
  */
 export class BigMouthAvatar {
   /**
    * @param {HTMLCanvasElement} canvas - 渲染目标画布。
-   * @param {Partial<AvatarConfig>} [config] - 覆盖默认配置。
+   * @param {AvatarInitOptions} [options] - 覆盖默认配置与主题。
    */
-  constructor(canvas, config = {}) {
+  constructor(canvas, options = {}) {
+    const { theme, ...configOverrides } = options;
     /** @type {HTMLCanvasElement} */
     this.canvas = canvas;
     /** @type {CanvasRenderingContext2D} */
     this.ctx = canvas.getContext('2d');
     /** @type {AvatarConfig} */
-    this.config = { ...DEFAULT_CONFIG, ...config };
+    this.config = { ...DEFAULT_CONFIG, ...configOverrides };
+    /** @type {AvatarThemeResolved} */
+    this.theme = resolveTheme(theme);
 
     /** @type {number} */
     this.currentMouth = 0.1;
@@ -237,6 +362,15 @@ export class BigMouthAvatar {
   }
 
   /**
+   * 应用主题颜色与嘴部样式。
+   * @param {AvatarTheme} theme - 主题配置。
+   */
+  setTheme(theme) {
+    this.theme = resolveTheme(theme);
+    this.draw();
+  }
+
+  /**
    * 动画更新：mouth 平滑、眨眼节奏与肢体摇摆。
    * @param {number} timestamp - RAF 时间戳（毫秒）。
    */
@@ -275,6 +409,8 @@ export class BigMouthAvatar {
 
     const { width, height } = this.canvas;
     ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = this.theme.bg;
+    ctx.fillRect(0, 0, width, height);
 
     ctx.save();
     ctx.translate(width / 2, height / 2 + 40);
@@ -301,8 +437,9 @@ export class BigMouthAvatar {
     const swing = Math.sin(time * this.config.limbSwingSpeed * clamp(1 + this.expression.swayAmp * 0.3, 0.5, 2)) * this.config.limbSwingAmplitude * swayFactor;
     const jitter = (Math.random() - 0.5) * 0.06 * (0.2 + this.currentMouth) * clamp(1 + this.expression.headNodAmp * 0.6, 0.6, 1.8);
 
-    ctx.strokeStyle = '#1f2937';
-    ctx.lineWidth = 6;
+    const bodyTheme = this.theme.body;
+    ctx.strokeStyle = bodyTheme.stroke;
+    ctx.lineWidth = bodyTheme.lineWidth;
 
     // 躯干
     ctx.beginPath();
@@ -333,32 +470,35 @@ export class BigMouthAvatar {
    */
   drawVectorHead(ctx) {
     ctx.save();
-    const nodOffset = Math.sin(performance.now() / 1000 * 1.6) * this.expression.headNodAmp * 18;
+    const theme = this.theme;
+    const mouthTheme = theme.mouth;
+    const headTheme = theme.head;
+    const eyeTheme = theme.eye;
+
+    const nodOffset = Math.sin(performance.now() / 1000 * (1.2 + this.expression.headNodAmp * 2.4)) * (6 + this.expression.headNodAmp * 12);
     const headY = -150 - this.currentMouth * 8 + nodOffset;
     const headRadius = 48;
-    const mouthWidthBase = 70;
+    const mouthWidthBase = 70 * mouthTheme.widthScale;
     const mouthScale = clamp(this.expression.mouthOpenScale, 0.5, 2.5);
-    const mouthHeight = (8 + this.currentMouth * 48) * mouthScale;
+    const mouthHeight = (8 + this.currentMouth * 48) * mouthTheme.heightScale * mouthScale;
     const visemeRounded = Math.round(this.currentViseme);
-    const roundedLip = visemeRounded === 9;
+    const roundedLip = visemeRounded === mouthTheme.roundedViseme;
     const tensionFactor = clamp(1 - this.expression.lipTension * 0.35, 0.6, 1.4);
-    const widthFactor = (roundedLip ? 0.65 : 1) * tensionFactor;
+    const mouthWidth = mouthWidthBase * (roundedLip ? 0.65 : 1) * tensionFactor;
 
-    // 头部轮廓
-    ctx.lineWidth = 5;
-    ctx.strokeStyle = '#111827';
-    ctx.fillStyle = '#f9fafb';
+    ctx.lineWidth = headTheme.lineWidth;
+    ctx.strokeStyle = headTheme.stroke;
+    ctx.fillStyle = headTheme.fill;
     ctx.beginPath();
     ctx.arc(0, headY, headRadius, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
 
-    // 眼睛
-    const eyeGap = 20;
-    const blinkBase = clamp(1 - this.blinkProgress, 0, 1);
-    const blinkAdjusted = clamp(blinkBase + this.expression.eyeBlinkBias * 0.5, 0, 1);
-    const eyeHeight = Math.max(2, 10 * blinkAdjusted);
-    ctx.lineWidth = 4;
+    const blinkAmount = clamp(this.blinkProgress + this.expression.eyeBlinkBias * 0.4, 0, 1);
+    const eyeGap = eyeTheme.gap;
+    const eyeHeight = Math.max(eyeTheme.minHeight, 10 * (1 - blinkAmount));
+    ctx.lineWidth = eyeTheme.lineWidth;
+    ctx.strokeStyle = eyeTheme.stroke;
     ctx.beginPath();
     ctx.moveTo(-eyeGap, headY - 12);
     ctx.lineTo(-eyeGap, headY - 12 + eyeHeight);
@@ -366,15 +506,13 @@ export class BigMouthAvatar {
     ctx.lineTo(eyeGap, headY - 12 + eyeHeight);
     ctx.stroke();
 
-    // 嘴唇：上唇和下唇使用贝塞尔曲线
-    const mouthWidth = mouthWidthBase * widthFactor;
-    const lipTopY = headY + 18 - this.expression.cornerCurve * 10;
-    const lipBottomY = lipTopY + mouthHeight + this.expression.cornerCurve * 16;
-    const controlOffset = mouthHeight * 0.7 * (1 + this.expression.cornerCurve * 0.4);
+    const cornerBias = clamp(mouthTheme.cornerCurveBase + this.expression.cornerCurve, -1.2, 1.2);
+    const lipTopY = headY + 18 - cornerBias * 10;
+    const lipBottomY = lipTopY + mouthHeight + cornerBias * 16;
+    const controlOffset = mouthHeight * 0.7 * (1 + cornerBias * 0.4);
 
-    ctx.lineWidth = 6;
-    ctx.strokeStyle = '#ef4444';
-
+    ctx.lineWidth = mouthTheme.lineWidth;
+    ctx.strokeStyle = mouthTheme.stroke;
     ctx.beginPath();
     ctx.moveTo(-mouthWidth, lipTopY);
     ctx.bezierCurveTo(-mouthWidth * 0.4, lipTopY - controlOffset, mouthWidth * 0.4, lipTopY - controlOffset, mouthWidth, lipTopY);
@@ -385,33 +523,46 @@ export class BigMouthAvatar {
     ctx.bezierCurveTo(-mouthWidth * 0.4, lipBottomY + controlOffset, mouthWidth * 0.4, lipBottomY + controlOffset, mouthWidth, lipBottomY);
     ctx.stroke();
 
-    // 口腔填充
-    ctx.fillStyle = '#7f1d1d';
+    ctx.fillStyle = mouthTheme.fill;
     ctx.beginPath();
     ctx.moveTo(-mouthWidth + 3, lipTopY + 3);
-    ctx.bezierCurveTo(-mouthWidth * 0.3, lipTopY + 3 - controlOffset * 0.8, mouthWidth * 0.3, lipTopY + 3 - controlOffset * 0.8, mouthWidth - 3, lipTopY + 3);
+    ctx.bezierCurveTo(
+      -mouthWidth * 0.3,
+      lipTopY + 3 - controlOffset * 0.8,
+      mouthWidth * 0.3,
+      lipTopY + 3 - controlOffset * 0.8,
+      mouthWidth - 3,
+      lipTopY + 3,
+    );
     ctx.lineTo(mouthWidth - 3, lipBottomY - 3);
-    ctx.bezierCurveTo(mouthWidth * 0.3, lipBottomY - 3 + controlOffset * 0.8, -mouthWidth * 0.3, lipBottomY - 3 + controlOffset * 0.8, -mouthWidth + 3, lipBottomY - 3);
+    ctx.bezierCurveTo(
+      mouthWidth * 0.3,
+      lipBottomY - 3 + controlOffset * 0.8,
+      -mouthWidth * 0.3,
+      lipBottomY - 3 + controlOffset * 0.8,
+      -mouthWidth + 3,
+      lipBottomY - 3,
+    );
     ctx.closePath();
     ctx.fill();
 
-    // 牙齿
-    if (mouthHeight > 12) {
-      ctx.fillStyle = '#fefce8';
-      const toothCount = Math.min(6, Math.max(3, Math.floor(mouthWidth / 14)));
+    if (mouthHeight > 12 * mouthTheme.heightScale) {
+      ctx.fillStyle = mouthTheme.toothFill;
+      const widthRatio = mouthWidthBase === 0 ? 1 : clamp(mouthWidth / mouthWidthBase, 0.6, 1.6);
+      const estimatedCount = Math.max(1, Math.round(mouthTheme.toothCount * mouthTheme.toothScale * widthRatio));
+      const toothCount = Math.max(1, estimatedCount);
       const toothWidth = (mouthWidth * 1.8) / toothCount / 2;
-      const toothHeight = Math.min(12, mouthHeight * 0.4);
+      const toothHeight = Math.min(12 * mouthTheme.heightScale, mouthHeight * 0.4);
       for (let i = 0; i < toothCount; i += 1) {
-        const ratio = (i / (toothCount - 1)) * 2 - 1;
-        const x = ratio * mouthWidth * 0.7;
+        const ratio = toothCount === 1 ? 0 : (i / (toothCount - 1)) * 2 - 1;
+        const x = toothCount === 1 ? 0 : ratio * mouthWidth * 0.7;
         ctx.fillRect(x - toothWidth / 2, lipTopY + 2, toothWidth, toothHeight);
       }
     }
 
-    // 圆唇时增加高光
-    if (roundedLip) {
-      ctx.strokeStyle = '#fca5a5';
-      ctx.lineWidth = 2;
+    if (roundedLip && mouthTheme.highlightWidth > 0) {
+      ctx.strokeStyle = mouthTheme.highlightStroke;
+      ctx.lineWidth = mouthTheme.highlightWidth;
       ctx.beginPath();
       ctx.ellipse(0, (lipTopY + lipBottomY) / 2, mouthWidth * 0.7, mouthHeight * 0.4, 0, 0, Math.PI * 2);
       ctx.stroke();

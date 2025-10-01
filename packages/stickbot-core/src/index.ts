@@ -3,8 +3,16 @@
  * 核心导出：包含 Avatar、时间线播放器与情绪工具。
  */
 
-export { BigMouthAvatar, DEFAULT_CONFIG } from './avatar.bigmouth.js';
-export type { AvatarConfig, MouthFrame, RenderMode, SpriteOptions } from './avatar.bigmouth.js';
+export { BigMouthAvatar, DEFAULT_CONFIG, DEFAULT_THEME } from './avatar.bigmouth.js';
+export type {
+  AvatarConfig,
+  AvatarInitOptions,
+  AvatarTheme,
+  AvatarThemeResolved,
+  MouthFrame,
+  RenderMode,
+  SpriteOptions,
+} from './avatar.bigmouth.js';
 
 export { TimelinePlayer } from './timeline-player.js';
 export type {
