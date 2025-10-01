@@ -12,6 +12,7 @@
   - 与 `BigMouthAvatar`、`MouthSignal` 协同更新 UI。
 - **`js/avatar.js`**：实现 `BigMouthAvatar`，绘制火柴人身体 + 大嘴巴头，支持 Vector / Sprite 两种模式。
 - **`js/lipsync.js`**：封装口型信号、时间轴插值与服务端请求，提供 `resolveServerUrl` 以跨源访问。
+- **`js/mouth-capture.js`**：实验性的摄像头口型捕捉器，若检测到全局 `faceMesh` 库则使用唇部关键点估计。
 
 ## 口型驱动优先级
 
@@ -65,6 +66,20 @@ web/
 2. 在控制面板查看 `TTS 供应器` 选项，确认服务端返回的 `mouthTimeline` 是否生效（控制台会输出 `[stickbot] 使用服务端时间轴驱动口型。`）。
 3. 切换渲染模式观察差异，若 Sprite 未加载成功，会有提示信息。
 4. 开发自定义口型映射时，可在控制台打印 `viseme` 与 `phoneme`（`main.js` 已在进度条旁显示）。
+
+## 摄像头口型捕捉（实验）
+
+- `index.html` 中新增“启用摄像头口型捕捉”开关，默认关闭，开启时浏览器会请求摄像头权限。
+- `MouthCapture` 会优先检查是否存在全局 `faceMesh.FaceMesh`（或 `FaceMesh`）构造函数：
+  - 若检测到，可使用唇部关键点（如 MediaPipe FaceMesh）计算 mouth 值，抖动明显降低；
+  - 未检测到时会自动回退到亮度差分，占位驱动嘴型但稳定性较弱。
+- 项目不内置关键点模型，若需更精准效果可在页面中自行通过 CDN 引入，例如：
+
+  ```html
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh"></script>
+  ```
+
+- 摄像头模式仅在未播放服务端/本地音频时驱动火柴人；播放流程会临时暂停 webcam 信号以避免冲突。
 
 ## 可视化调参面板 Tuner
 
