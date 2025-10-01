@@ -92,6 +92,81 @@
         gap: 6px;
       }
 
+      .word-timeline {
+        border: 1px solid #e5e7eb;
+        background: #f9fafb;
+        border-radius: 10px;
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .word-timeline-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 13px;
+        color: #111827;
+      }
+
+      .word-timeline-header label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: #4b5563;
+      }
+
+      .word-timeline-bar {
+        min-height: 36px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 8px;
+        background: #ffffff;
+        border-radius: 8px;
+        border: 1px solid #e5e7eb;
+      }
+
+      .word-chip {
+        padding: 4px 6px;
+        border-radius: 6px;
+        background: rgba(79, 70, 229, 0.08);
+        color: #4338ca;
+        font-size: 13px;
+        transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+      }
+
+      .word-chip.active {
+        background: #4f46e5;
+        color: #ffffff;
+        box-shadow: 0 6px 16px rgba(79, 70, 229, 0.35);
+      }
+
+      .word-timeline textarea {
+        width: 100%;
+        height: 96px;
+        resize: vertical;
+        border-radius: 8px;
+        border: 1px solid #d1d5db;
+        padding: 8px;
+        font-size: 13px;
+        font-family: ui-monospace, SFMono-Regular, SFMono, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+        box-sizing: border-box;
+      }
+
+      .word-timeline-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .word-timeline-status {
+        font-size: 12px;
+        color: #6b7280;
+      }
+
       .progress-container {
         display: flex;
         flex-direction: column;
@@ -152,6 +227,24 @@
         <div class="progress-container">
           <span>口型幅度 <span id="viseme-display" style="font-size: 12px; color: #6b7280"></span></span>
           <progress id="mouth-progress" value="0" max="1"></progress>
+        </div>
+        <div class="word-timeline">
+          <div class="word-timeline-header">
+            <span>逐词字幕</span>
+            <label>
+              <input type="checkbox" id="use-manual-vtt" />
+              使用手动 VTT
+            </label>
+          </div>
+          <div class="word-timeline-bar" id="word-timeline-bar">
+            <span class="word-timeline-status" id="word-timeline-empty">暂无逐词字幕。</span>
+          </div>
+          <textarea id="word-vtt-input" placeholder="可粘贴 .vtt 字幕文本，格式为 WebVTT"></textarea>
+          <div class="word-timeline-actions">
+            <button class="secondary" id="apply-vtt-btn" type="button">加载 VTT 字幕</button>
+            <button class="secondary" id="clear-vtt-btn" type="button">清除手动字幕</button>
+          </div>
+          <span class="word-timeline-status" id="word-timeline-status">服务端返回 wordTimeline 时自动展示，启用手动 VTT 可覆盖。</span>
         </div>
         <div style="display: flex; gap: 12px">
           <button class="primary" id="play-btn">朗读并演示</button>

@@ -9,6 +9,7 @@ import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { mapPhonemeToViseme } from '../mapping.js';
 import { accumulateSegments, ensureTimelineFallback, generateTimeline } from '../utils/timeline.js';
+import { generateWordTimelineFromSegments } from '../utils/wordTimeline.js';
 
 /**
  * @typedef {import('../mapping.js').VisemeConfig} VisemeConfig
@@ -78,6 +79,7 @@ export class EspeakAdapter {
     const segments = this.parsePho(phoPath);
     const { cumulative, totalDuration } = accumulateSegments(segments);
     const timeline = ensureTimelineFallback(generateTimeline(cumulative, totalDuration, this.sampleRate));
+    const wordTimeline = generateWordTimelineFromSegments(trimmed, cumulative);
 
     // `.pho` 文件只在解析阶段使用，为避免目录堆积及时删除。
     await fs.promises.unlink(phoPath).catch(() => {});
@@ -87,6 +89,7 @@ export class EspeakAdapter {
       audioPath: wavPath,
       audioType: 'audio/wav',
       mouthTimeline: timeline,
+      wordTimeline,
       duration: totalDuration,
     };
   }

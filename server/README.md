@@ -1,6 +1,6 @@
 # stickbot 服务端（第二轮）
 
-本目录提供可运行的 Express 服务，接入 eSpeak NG 命令行，实现真实的语音合成与口型时间轴。服务端将音频写入临时目录，并通过 `/audio/:id` 提供下载。
+本目录提供可运行的 Express 服务，接入 eSpeak NG 命令行，实现真实的语音合成与口型/逐词时间轴。服务端将音频写入临时目录，并通过 `/audio/:id` 提供下载，同时输出 `wordTimeline` 与 WebVTT 字幕文本。
 
 ## 快速启动
 
@@ -64,7 +64,7 @@ an 20 100
 
 1. 读取每一行的音素与时长，并按顺序累计成时间轴。
 2. 将音素映射为口型编号（viseme）。
-3. 根据采样率（默认 80Hz）生成稀疏关键帧，最终返回给前端。
+3. 根据采样率（默认 80Hz）生成稀疏关键帧，同时按语言特性切分文本并分配逐词字幕时间轴。
 
 ## 口型映射（默认值）
 
@@ -134,13 +134,38 @@ mouth 值范围为 `[0,1]`，前端按照线性插值驱动“大嘴巴”头像
     { "t": 0, "v": 0.05, "visemeId": 0, "phoneme": "sil" },
     { "t": 0.0125, "v": 0.32, "visemeId": 2, "phoneme": "t" }
   ],
+  "wordTimeline": [
+    { "tStart": 0, "tEnd": 0.6, "text": "你好" },
+    { "tStart": 0.6, "tEnd": 1.84, "text": "stickbot" }
+  ],
   "duration": 1.84,
   "provider": "espeak",
   "sampleRate": 80
 }
 ```
 
-前端会优先使用 `mouthTimeline`；若数组为空，会退回到 Web Speech 或音量包络分析。
+前端会优先使用 `mouthTimeline`；若数组为空，会退回到 Web Speech 或音量包络分析。`wordTimeline` 为可选字段，主要用于逐词高亮字幕，也可作为 `GET /tts/vtt` 的缓存结果。
+
+### `GET /tts/vtt`
+
+- `text`（必填）：要合成的文本。
+- `voice`、`rate`、`provider` 与 `/tts` 保持一致。
+
+返回内容类型为 `text/vtt`，示例如下：
+
+```
+WEBVTT
+
+1
+00:00:00.000 --> 00:00:00.600
+你好
+
+2
+00:00:00.600 --> 00:00:01.840
+stickbot
+```
+
+该接口仅返回内存中的 WebVTT 文本，不会在临时目录写入音频，可用于导出逐词字幕或在前端直接粘贴。
 
 ### `GET /audio/:id`
 

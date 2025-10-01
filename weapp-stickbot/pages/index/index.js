@@ -39,6 +39,64 @@ function interpolateTimeline(timeline, time) {
   return { value: last.v, visemeId: last.visemeId };
 }
 
+/**
+ * 规范化逐词字幕时间轴。
+ * @param {Array<{ text?: string, tStart?: number, tEnd?: number, start?: number, end?: number, t?: number }>} timeline - 原始
+数据。
+ * @returns {{ text: string, tStart: number, tEnd: number }[]} 规范化结果。
+ */
+function normalizeWordTimeline(timeline) {
+  if (!Array.isArray(timeline)) {
+    return [];
+  }
+  return timeline
+    .map((item) => {
+      const text = typeof item?.text === 'string' ? item.text.trim() : '';
+      if (!text) {
+        return null;
+      }
+      const startCandidate = [item?.tStart, item?.start, item?.t].find((value) => Number.isFinite(Number(value)));
+      const endCandidate = [item?.tEnd, item?.end, item?.t].find((value) => Number.isFinite(Number(value)));
+      const start = Math.max(0, Number(startCandidate ?? 0));
+      let end = Number(endCandidate ?? start);
+      if (!Number.isFinite(end)) {
+        end = start;
+      }
+      if (end < start) {
+        end = start;
+      }
+      if (end === start) {
+        end = start + 0.001;
+      }
+      return { text, tStart: start, tEnd: end };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.tStart - b.tStart);
+}
+
+/**
+ * 根据时间获取当前字幕词块。
+ * @param {{ text: string, tStart: number, tEnd: number }[]} timeline - 字幕时间轴。
+ * @param {number} time - 当前播放进度（秒）。
+ * @returns {{ index: number, text: string }} 字幕索引与文本。
+ */
+function getWordAtTime(timeline, time) {
+  if (!timeline || timeline.length === 0) {
+    return { index: -1, text: '' };
+  }
+  for (let i = 0; i < timeline.length; i += 1) {
+    const segment = timeline[i];
+    if (time >= segment.tStart && time < segment.tEnd) {
+      return { index: i, text: segment.text };
+    }
+  }
+  const last = timeline[timeline.length - 1];
+  if (time >= last.tEnd) {
+    return { index: timeline.length - 1, text: last.text };
+  }
+  return { index: -1, text: '' };
+}
+
 Page({
   data: {
     text: '你好，我是 stickbot，大嘴巴头准备就绪！',
@@ -52,6 +110,7 @@ Page({
     serverOrigin: '',
     spriteBasePath: '/assets/mouth',
     autoGainEnabled: true,
+    currentWord: '',
   },
   /**
    * 生命周期函数：初始化画布、音频与服务端信息。
@@ -66,6 +125,8 @@ Page({
     this.timelineTimer = null;
     this.timelineStart = 0;
     this.autoGainProcessor = null;
+    this.wordTimeline = [];
+    this.wordIndex = -1;
 
     this.innerAudio = wx.createInnerAudioContext();
     this.innerAudio.obeyMuteSwitch = false;
@@ -142,6 +203,9 @@ Page({
           return;
         }
         this.timeline = result.mouthTimeline || [];
+        this.wordTimeline = normalizeWordTimeline(result.wordTimeline || []);
+        this.wordIndex = -1;
+        this.setData({ currentWord: '' });
         this.prepareAutoGain();
         this.innerAudio.src = this.resolveServerUrl(result.audioUrl);
         this.innerAudio.play();
@@ -174,7 +238,9 @@ Page({
    * 重置 mouth 状态并重绘。
    */
   resetMouth() {
-    this.setData({ mouth: 0.1, mouthDisplay: '0.10', visemeId: 0 });
+    this.setData({ mouth: 0.1, mouthDisplay: '0.10', visemeId: 0, currentWord: '' });
+    this.wordTimeline = [];
+    this.wordIndex = -1;
     this.drawAvatar();
     if (this.autoGainProcessor) {
       this.autoGainProcessor.reset();
@@ -231,20 +297,33 @@ Page({
    */
   startTimelineLoop() {
     this.stopTimelineLoop();
-    if (!this.timeline || this.timeline.length === 0) {
+    const hasMouthTimeline = Array.isArray(this.timeline) && this.timeline.length > 0;
+    const hasWordTimeline = Array.isArray(this.wordTimeline) && this.wordTimeline.length > 0;
+    if (!hasMouthTimeline && !hasWordTimeline) {
       return;
     }
     this.timelineStart = Date.now();
     this.timelineTimer = setInterval(() => {
       const elapsed = (Date.now() - this.timelineStart) / 1000;
-      const frame = interpolateTimeline(this.timeline, elapsed);
-      let value = frame.value;
-      if (this.autoGainProcessor) {
-        value = this.autoGainProcessor.apply(elapsed, value).value;
+      if (hasMouthTimeline) {
+        const frame = interpolateTimeline(this.timeline, elapsed);
+        let value = frame.value;
+        if (this.autoGainProcessor) {
+          value = this.autoGainProcessor.apply(elapsed, value).value;
+        }
+        this.updateMouthFrame(value, frame.visemeId);
       }
-      this.updateMouthFrame(value, frame.visemeId);
-      const lastTime = this.timeline[this.timeline.length - 1]?.t || 0;
-      if (elapsed >= lastTime) {
+      if (hasWordTimeline) {
+        const currentWord = getWordAtTime(this.wordTimeline, elapsed);
+        if (currentWord.index !== this.wordIndex) {
+          this.wordIndex = currentWord.index;
+          this.setData({ currentWord: currentWord.text });
+        }
+      }
+      const lastMouthTime = hasMouthTimeline ? this.timeline[this.timeline.length - 1]?.t || 0 : 0;
+      const lastWordTime = hasWordTimeline ? this.wordTimeline[this.wordTimeline.length - 1]?.tEnd || 0 : 0;
+      const lastTime = Math.max(lastMouthTime, lastWordTime);
+      if (lastTime > 0 && elapsed >= lastTime) {
         this.stopTimelineLoop();
       }
     }, TIMER_INTERVAL);

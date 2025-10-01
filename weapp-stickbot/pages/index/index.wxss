@@ -65,3 +65,18 @@
   font-size: 12px;
   color: #9ca3af;
 }
+
+.subtitle-bar {
+  width: 320px;
+  min-height: 44px;
+  background: linear-gradient(135deg, #1f2937, #111827);
+  color: #f9fafb;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 20px;
+  font-size: 16px;
+  letter-spacing: 0.5px;
+  box-shadow: 0 16px 30px rgba(17, 24, 39, 0.18);
+}

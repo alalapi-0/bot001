@@ -9,6 +9,7 @@ import path from 'path';
 import express from 'express';
 import { loadServerConfig, ensureTmpDir } from './src/config.js';
 import { createProviders } from './src/tts/providerFactory.js';
+import { generateWordTimeline } from './src/tts/utils/wordTimeline.js';
 
 /**
  * 加载配置与初始化资源目录。
@@ -124,12 +125,77 @@ app.get('/tts', async (req, res) => {
       audioUrl,
       audioType: result.audioType,
       mouthTimeline: result.mouthTimeline,
+      wordTimeline: result.wordTimeline,
       duration: result.duration,
       provider: providerKey,
       sampleRate: config.sampleRate,
     });
   } catch (error) {
     res.status(500).json({ message: 'TTS 处理失败', detail: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+/**
+ * 将秒数格式化为 WebVTT 时间戳。
+ * @param {number} seconds - 时间（秒）。
+ * @returns {string} WebVTT 时间戳（HH:MM:SS.mmm）。
+ */
+const formatVttTimestamp = (seconds) => {
+  const clamped = Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
+  const totalMs = Math.max(0, Math.round(clamped * 1000));
+  const hours = Math.floor(totalMs / 3600000);
+  const minutes = Math.floor((totalMs % 3600000) / 60000);
+  const secs = Math.floor((totalMs % 60000) / 1000);
+  const ms = totalMs % 1000;
+  const pad = (value, length = 2) => String(value).padStart(length, '0');
+  return `${pad(hours)}:${pad(minutes)}:${pad(secs)}.${pad(ms, 3)}`;
+};
+
+/**
+ * 新增 WebVTT 导出接口，返回逐词字幕文本，不落盘。
+ */
+app.get('/tts/vtt', async (req, res) => {
+  let synthResult;
+  try {
+    const text = String(req.query.text || '').trim();
+    if (!text) {
+      res.status(400).json({ message: 'text 参数不能为空。' });
+      return;
+    }
+    const providerKey = /** @type {'espeak' | 'azure'} */ (req.query.provider || config.defaultProvider);
+    const provider = providers[providerKey];
+    if (!provider) {
+      res.status(400).json({ message: `未找到 provider: ${providerKey}` });
+      return;
+    }
+    const voice = req.query.voice ? String(req.query.voice) : undefined;
+    const rate = req.query.rate ? Number(req.query.rate) : undefined;
+
+    synthResult = await provider.synthesize(text, { voice, rate });
+    const sourceTimeline = Array.isArray(synthResult.wordTimeline) ? synthResult.wordTimeline : [];
+    const wordTimeline =
+      sourceTimeline.length > 0 ? sourceTimeline : generateWordTimeline(text, synthResult.duration ?? 0);
+
+    const blocks = wordTimeline.map((item, index) => {
+      const start = formatVttTimestamp(item.tStart ?? item.t ?? 0);
+      const end = formatVttTimestamp(item.tEnd ?? item.tStart ?? item.t ?? 0);
+      const lines = String(item.text ?? '').trim() || '...';
+      return `${index + 1}\n${start} --> ${end}\n${lines}`;
+    });
+
+    let body = 'WEBVTT\n\n';
+    if (blocks.length > 0) {
+      body += `${blocks.join('\n\n')}\n`;
+    }
+    res.type('text/vtt').send(body);
+  } catch (error) {
+    res
+      .status(500)
+      .json({ message: '生成 WebVTT 失败', detail: error instanceof Error ? error.message : String(error) });
+  } finally {
+    if (synthResult?.audioPath) {
+      fs.promises.unlink(synthResult.audioPath).catch(() => {});
+    }
   }
 });
 
