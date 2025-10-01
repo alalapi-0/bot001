@@ -101,6 +101,82 @@ function measureElapsedMs(start) {
 
 const auditLogger = new AuditLogger(config.logDir);
 
+const rolesDir = path.resolve(process.cwd(), 'roles');
+const ROLE_CACHE_TTL_MS = 10_000;
+
+/**
+ * @typedef {Object} RoleProfile
+ * @property {string} id - 角色唯一标识。
+ * @property {string} [name] - 角色名称。
+ * @property {string} [description] - 角色简介。
+ * @property {string} [voice] - 默认语音 ID。
+ * @property {Record<string, number>} [preset] - 表情预设。
+ * @property {string} [theme] - 主题皮肤标识。
+ * @property {string} [renderMode] - 默认渲染模式。
+ */
+
+/** @type {{ list: RoleProfile[], map: Map<string, RoleProfile>, loadedAt: number }} */
+let rolesCache = { list: [], map: new Map(), loadedAt: 0 };
+
+/**
+ * 从磁盘读取角色档案目录。
+ * @returns {Promise<{ list: RoleProfile[], map: Map<string, RoleProfile> }>}
+ */
+async function loadRolesFromDisk() {
+  try {
+    const entries = await fs.promises.readdir(rolesDir, { withFileTypes: true });
+    /** @type {RoleProfile[]} */
+    const roles = [];
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) {
+        continue;
+      }
+      const fullPath = path.join(rolesDir, entry.name);
+      try {
+        const raw = await fs.promises.readFile(fullPath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') {
+          continue;
+        }
+        const id = typeof parsed.id === 'string' && parsed.id.trim() ? parsed.id.trim() : entry.name.replace(/\.json$/i, '');
+        roles.push({
+          ...parsed,
+          id,
+        });
+      } catch (error) {
+        console.warn(`[roles] 解析角色失败: ${entry.name}`, error);
+      }
+    }
+    roles.sort((a, b) => {
+      const nameA = String(a.name || a.id || '');
+      const nameB = String(b.name || b.id || '');
+      return nameA.localeCompare(nameB, 'zh-Hans-CN');
+    });
+    return { list: roles, map: new Map(roles.map((role) => [role.id, role])) };
+  } catch (error) {
+    if (error && typeof error === 'object' && /** @type {{ code?: string }} */ (error).code === 'ENOENT') {
+      return { list: [], map: new Map() };
+    }
+    console.warn('[roles] 读取角色目录失败', error);
+    return { list: [], map: new Map() };
+  }
+}
+
+/**
+ * 获取角色列表，带有简单缓存避免频繁读取磁盘。
+ * @param {boolean} [forceReload] - 是否忽略缓存强制刷新。
+ * @returns {Promise<{ list: RoleProfile[], map: Map<string, RoleProfile> }>}
+ */
+async function getRoles(forceReload = false) {
+  const now = Date.now();
+  if (!forceReload && now - rolesCache.loadedAt < ROLE_CACHE_TTL_MS && rolesCache.list.length > 0) {
+    return rolesCache;
+  }
+  const loaded = await loadRolesFromDisk();
+  rolesCache = { ...loaded, loadedAt: now };
+  return rolesCache;
+}
+
 /**
  * 初始化 Express 应用。
  */
@@ -150,6 +226,47 @@ app.get('/', (_req, res) => {
     tmpDir: config.tmpDir,
     sampleRate: config.sampleRate,
   });
+});
+
+/**
+ * 返回全部角色档案列表。
+ */
+app.get('/roles', async (_req, res) => {
+  try {
+    const { list } = await getRoles();
+    res.json({ roles: list });
+  } catch (error) {
+    console.warn('[roles] 获取角色列表失败', error);
+    res.status(500).json({ message: '读取角色档案失败' });
+  }
+});
+
+/**
+ * 返回指定角色档案，若缓存未命中会尝试刷新一次。
+ */
+app.get('/roles/:id', async (req, res) => {
+  const rawId = String(req.params.id || '').trim();
+  if (!rawId) {
+    res.status(400).json({ message: '缺少角色 ID。' });
+    return;
+  }
+  const normalized = rawId.replace(/\.json$/i, '');
+  try {
+    let { map } = await getRoles();
+    let role = map.get(normalized);
+    if (!role) {
+      ({ map } = await getRoles(true));
+      role = map.get(normalized);
+    }
+    if (!role) {
+      res.status(404).json({ message: `未找到角色：${normalized}` });
+      return;
+    }
+    res.json(role);
+  } catch (error) {
+    console.warn('[roles] 获取单个角色失败', error);
+    res.status(500).json({ message: '读取角色档案失败' });
+  }
 });
 
 /**

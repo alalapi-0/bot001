@@ -29,6 +29,26 @@ export const DEFAULT_CONFIG = {
 };
 
 /**
+ * 对数值进行夹紧。
+ * @param {number} value - 原始数值。
+ * @param {number} min - 最小值。
+ * @param {number} max - 最大值。
+ * @returns {number} 夹紧后的数值。
+ */
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+/**
+ * 解析数值，若非法则返回回退值。
+ * @param {unknown} candidate - 原始输入。
+ * @param {number} fallback - 回退值。
+ * @returns {number} 数字结果。
+ */
+const pickNumber = (candidate, fallback) => {
+  const num = Number(candidate);
+  return Number.isFinite(num) ? num : fallback;
+};
+
+/**
  * 随机生成下一次眨眼的时间戳。
  * @param {[number, number]} range - 眨眼间隔范围。
  * @returns {number} 下一次眨眼的绝对时间（秒）。
@@ -86,6 +106,16 @@ export class BigMouthAvatar {
     this.spriteFrames = [];
     /** @type {boolean} */
     this.spriteLoaded = false;
+
+    /** @type {{ mouthOpenScale: number, lipTension: number, cornerCurve: number, eyeBlinkBias: number, headNodAmp: number, swayAmp: number }} */
+    this.expression = {
+      mouthOpenScale: 1,
+      lipTension: 0,
+      cornerCurve: 0,
+      eyeBlinkBias: 0,
+      headNodAmp: 0.2,
+      swayAmp: 0.2,
+    };
   }
 
   /**
@@ -192,6 +222,21 @@ export class BigMouthAvatar {
   }
 
   /**
+   * 注入表情覆盖参数，控制嘴角、眨眼等细节。
+   * @param {Partial<{ mouthOpenScale: number, lipTension: number, cornerCurve: number, eyeBlinkBias: number, headNodAmp: number, swayAmp: number }>} preset - 表情预设。
+   */
+  setExpressionOverride(preset = {}) {
+    this.expression = {
+      mouthOpenScale: clamp(pickNumber(preset.mouthOpenScale, this.expression.mouthOpenScale), 0.5, 2.5),
+      lipTension: clamp(pickNumber(preset.lipTension, this.expression.lipTension), -1, 1),
+      cornerCurve: clamp(pickNumber(preset.cornerCurve, this.expression.cornerCurve), -1, 1),
+      eyeBlinkBias: clamp(pickNumber(preset.eyeBlinkBias, this.expression.eyeBlinkBias), -0.9, 0.9),
+      headNodAmp: clamp(pickNumber(preset.headNodAmp, this.expression.headNodAmp), 0, 1.2),
+      swayAmp: clamp(pickNumber(preset.swayAmp, this.expression.swayAmp), 0, 1),
+    };
+  }
+
+  /**
    * 动画更新：mouth 平滑、眨眼节奏与肢体摇摆。
    * @param {number} timestamp - RAF 时间戳（毫秒）。
    */
@@ -252,8 +297,9 @@ export class BigMouthAvatar {
    */
   drawBody(ctx) {
     const time = performance.now() / 1000;
-    const swing = Math.sin(time * this.config.limbSwingSpeed) * this.config.limbSwingAmplitude;
-    const jitter = (Math.random() - 0.5) * 0.06 * (0.2 + this.currentMouth);
+    const swayFactor = clamp(1 + this.expression.swayAmp * 0.8, 0.5, 2);
+    const swing = Math.sin(time * this.config.limbSwingSpeed * clamp(1 + this.expression.swayAmp * 0.3, 0.5, 2)) * this.config.limbSwingAmplitude * swayFactor;
+    const jitter = (Math.random() - 0.5) * 0.06 * (0.2 + this.currentMouth) * clamp(1 + this.expression.headNodAmp * 0.6, 0.6, 1.8);
 
     ctx.strokeStyle = '#1f2937';
     ctx.lineWidth = 6;
@@ -287,13 +333,16 @@ export class BigMouthAvatar {
    */
   drawVectorHead(ctx) {
     ctx.save();
-    const headY = -150 - this.currentMouth * 8;
+    const nodOffset = Math.sin(performance.now() / 1000 * 1.6) * this.expression.headNodAmp * 18;
+    const headY = -150 - this.currentMouth * 8 + nodOffset;
     const headRadius = 48;
     const mouthWidthBase = 70;
-    const mouthHeight = 8 + this.currentMouth * 48;
+    const mouthScale = clamp(this.expression.mouthOpenScale, 0.5, 2.5);
+    const mouthHeight = (8 + this.currentMouth * 48) * mouthScale;
     const visemeRounded = Math.round(this.currentViseme);
     const roundedLip = visemeRounded === 9;
-    const widthFactor = roundedLip ? 0.65 : 1;
+    const tensionFactor = clamp(1 - this.expression.lipTension * 0.35, 0.6, 1.4);
+    const widthFactor = (roundedLip ? 0.65 : 1) * tensionFactor;
 
     // 头部轮廓
     ctx.lineWidth = 5;
@@ -306,7 +355,9 @@ export class BigMouthAvatar {
 
     // 眼睛
     const eyeGap = 20;
-    const eyeHeight = Math.max(2, 10 * (1 - this.blinkProgress));
+    const blinkBase = clamp(1 - this.blinkProgress, 0, 1);
+    const blinkAdjusted = clamp(blinkBase + this.expression.eyeBlinkBias * 0.5, 0, 1);
+    const eyeHeight = Math.max(2, 10 * blinkAdjusted);
     ctx.lineWidth = 4;
     ctx.beginPath();
     ctx.moveTo(-eyeGap, headY - 12);
@@ -317,9 +368,9 @@ export class BigMouthAvatar {
 
     // 嘴唇：上唇和下唇使用贝塞尔曲线
     const mouthWidth = mouthWidthBase * widthFactor;
-    const lipTopY = headY + 18;
-    const lipBottomY = lipTopY + mouthHeight;
-    const controlOffset = mouthHeight * 0.7;
+    const lipTopY = headY + 18 - this.expression.cornerCurve * 10;
+    const lipBottomY = lipTopY + mouthHeight + this.expression.cornerCurve * 16;
+    const controlOffset = mouthHeight * 0.7 * (1 + this.expression.cornerCurve * 0.4);
 
     ctx.lineWidth = 6;
     ctx.strokeStyle = '#ef4444';
@@ -374,13 +425,14 @@ export class BigMouthAvatar {
    * @param {CanvasRenderingContext2D} ctx - 画布上下文。
    */
   drawSpriteHead(ctx) {
-    const headY = -180;
+    const nodOffset = Math.sin(performance.now() / 1000 * 1.6) * this.expression.headNodAmp * 18;
+    const headY = -180 + nodOffset;
     const image = this.spriteFrames[Math.round(this.currentViseme)] || this.spriteFrames[0];
     if (!image) {
       this.drawVectorHead(ctx);
       return;
     }
-    const scale = 1 + this.currentMouth * 0.1;
+    const scale = 1 + this.currentMouth * 0.1 * clamp(this.expression.mouthOpenScale, 0.5, 2.5);
     const width = image.width * scale;
     const height = image.height * scale;
     ctx.drawImage(image, -width / 2, headY - height / 2, width, height);

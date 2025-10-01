@@ -1,0 +1,16 @@
+{
+  "id": "default",
+  "name": "基础款",
+  "description": "默认表情与经典紫色主题，适合展示 stickbot 的基础形象。",
+  "voice": "zh",
+  "preset": {
+    "mouthOpenScale": 1.0,
+    "lipTension": 0,
+    "cornerCurve": 0.05,
+    "eyeBlinkBias": 0,
+    "headNodAmp": 0.2,
+    "swayAmp": 0.25
+  },
+  "theme": "classic",
+  "renderMode": "vector"
+}

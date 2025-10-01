@@ -12,6 +12,13 @@
 - `pages/index`：主页面，实现文本输入、TTS 调用与口型渲染。
 - `assets/`（可选）：用户可自行放置 `mouth/v0.png` 等贴图文件。
 
+## 角色档案切换
+
+- 首页顶部新增“角色档案”选择器，会请求服务端 `GET /roles` 获取 JSON 列表；
+- 选中角色后，默认 voice、渲染模式、主题配色以及表情预设会同时更新；
+- 当前选择会写入 `wx.setStorageSync('stickbot:role-profile')`，下次打开自动恢复；
+- 若服务端暂未提供档案，则回退到仓库内置的 `default/energetic/soft` 示例，可在 `roles/` 中自由增删。
+
 ## 使用步骤
 
 1. 在小程序管理后台添加合法域名（开发环境可勾选“开发阶段忽略”），确保包含 `http://localhost:8787` 或部署地址。

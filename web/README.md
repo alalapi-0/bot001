@@ -14,6 +14,15 @@
 - **`js/lipsync.js`**：封装口型信号、时间轴插值与服务端请求，提供 `resolveServerUrl` 以跨源访问。
 - **`js/mouth-capture.js`**：实验性的摄像头口型捕捉器，若检测到全局 `faceMesh` 库则使用唇部关键点估计。
 
+## 角色档案与主题切换
+
+- 页面右侧“角色档案”下拉框会调用服务端 `GET /roles` 拉取 JSON 档案，切换后自动应用：
+  - `preset` 通过 `setExpressionOverride` 调整嘴角、眨眼与肢体幅度；
+  - `voice` 作为 `/tts` 的默认 `voice` 参数，同时覆盖 Web Speech 兜底语种；
+  - `renderMode` 与 `theme` 同步更新 Canvas 渲染模式与页面配色；
+- 档案存放于仓库根目录 `roles/`，可随时新增/修改，浏览器会在刷新后读取；
+- 浏览器会将最近一次选择保存在 `localStorage`，再次进入页面时自动恢复。
+
 ## 口型驱动优先级
 
 1. **服务端时间轴**：`/tts` 返回 `mouthTimeline` 时，`main.js` 会创建 `<audio>` 元素播放 `audioUrl`，同时调用 `MouthSignal.playTimeline`，以 ~80Hz 的关键帧驱动嘴唇开合。
