@@ -62,6 +62,27 @@
   padding: 6px 0;
 }
 
+.plugin-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.plugin-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.plugin-hint {
+  font-size: 12px;
+  color: #94a3b8;
+}
+
 .button-group {
   display: flex;
   gap: 12px;
