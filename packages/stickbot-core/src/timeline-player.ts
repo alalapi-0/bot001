@@ -42,6 +42,16 @@ export interface TimelinePlayerOptions {
   smoothing?: number;
   /** 额外的表情关键帧列表。 */
   expressionTimeline?: ExpressionTimelineKeyframe[];
+  /**
+   * 表情包语义时间轴，例如 `smileBoost`、`browLift`。
+   * 数值建议在 [0,1]，内部会映射到 {@link AvatarExpressionParams}。
+   */
+  emoteTimeline?: ExpressionTimelineKeyframe[];
+  /**
+   * 手势语义时间轴，例如 `headNod`、`swayBoost`。
+   * 会与表情时间线融合，并通过 {@link BigMouthAvatar} 呈现。
+   */
+  gestureTimeline?: ExpressionTimelineKeyframe[];
   /** 表情整体强度缩放，默认 1。 */
   expressionScale?: number;
   /** 自动增益配置。传入 true 启用默认参数，或指定配置覆盖。 */
@@ -90,6 +100,8 @@ const DEFAULT_EXPRESSION: AvatarExpressionParams = {
   swayAmp: 0,
 };
 
+type SemanticState = Record<string, number>;
+
 const clampExpressionState = (
   expression: AvatarExpressionParams,
 ): AvatarExpressionParams => ({
@@ -113,6 +125,65 @@ const scaleExpression = (
     headNodAmp: expression.headNodAmp * scale,
     swayAmp: expression.swayAmp * scale,
   });
+
+const applySemanticKey = (
+  target: AvatarExpressionParams,
+  key: string,
+  rawValue: number,
+): void => {
+  const value = clamp(rawValue, -1, 1);
+  const record = target as unknown as Record<string, number>;
+  if (Object.prototype.hasOwnProperty.call(record, key)) {
+    record[key] = value;
+    return;
+  }
+  switch (key) {
+    case 'smileBoost': {
+      record.cornerCurve = clamp(record.cornerCurve + value * 0.8, -1, 1);
+      record.mouthOpenScale = clamp(record.mouthOpenScale + value * 0.3, 0.2, 3);
+      record.lipTension = clamp(record.lipTension - value * 0.25, -1, 1);
+      break;
+    }
+    case 'browLift': {
+      record.eyeBlinkBias = clamp(record.eyeBlinkBias - value * 0.6, -1, 1);
+      break;
+    }
+    case 'headNod': {
+      record.headNodAmp = clamp(record.headNodAmp + value * 0.8, 0, 2);
+      break;
+    }
+    case 'swayBoost': {
+      record.swayAmp = clamp(record.swayAmp + value * 0.6, 0, 2);
+      break;
+    }
+    default: {
+      if (key.endsWith('Boost')) {
+        const targetKey = key.replace(/Boost$/u, '');
+        if (Object.prototype.hasOwnProperty.call(record, targetKey)) {
+          record[targetKey] = clamp(record[targetKey] + value, -2, 3);
+        }
+      }
+      break;
+    }
+  }
+};
+
+const applySemanticModifiers = (
+  base: AvatarExpressionParams,
+  emote: SemanticState,
+  gesture: SemanticState,
+): AvatarExpressionParams => {
+  const result: AvatarExpressionParams = { ...base };
+  const applyState = (state: SemanticState) => {
+    for (const [key, val] of Object.entries(state)) {
+      if (Math.abs(val) < 1e-3) continue;
+      applySemanticKey(result, key, val);
+    }
+  };
+  applyState(emote);
+  applyState(gesture);
+  return clampExpressionState(result);
+};
 
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 
@@ -218,6 +289,10 @@ export class TimelinePlayer {
 
   private readonly expressionTimeline: Map<string, ExpressionTimelineKeyframe[]>;
 
+  private readonly emoteTimeline: Map<string, ExpressionTimelineKeyframe[]>;
+
+  private readonly gestureTimeline: Map<string, ExpressionTimelineKeyframe[]>;
+
   private readonly smoothing: number;
 
   private readonly expressionScale: number;
@@ -234,6 +309,8 @@ export class TimelinePlayer {
   ) {
     this.mouthTimeline = [...mouthTimeline].sort((a, b) => a.t - b.t);
     this.expressionTimeline = groupExpressionKeyframes(options.expressionTimeline ?? []);
+    this.emoteTimeline = groupExpressionKeyframes(options.emoteTimeline ?? []);
+    this.gestureTimeline = groupExpressionKeyframes(options.gestureTimeline ?? []);
     this.smoothing = clamp(options.smoothing ?? 0.22, 0, 0.95);
     this.expressionScale = clamp(options.expressionScale ?? 1, 0, 3);
     this.autoGainState = this.createAutoGainState(options.autoGain);
@@ -262,17 +339,24 @@ export class TimelinePlayer {
     const smoothed = this.applySmoothing(rawValue, time);
     const expression = this.sampleExpression(time);
     const scaledExpression = scaleExpression(expression, this.expressionScale);
+    const emoteState = this.sampleSemanticState(this.emoteTimeline, time);
+    const gestureState = this.sampleSemanticState(this.gestureTimeline, time);
+    const enrichedExpression = applySemanticModifiers(
+      scaledExpression,
+      emoteState,
+      gestureState,
+    );
     const autoGain = this.autoGainState ? this.computeAutoGain(time) : 1;
     const adjustedExpression = this.autoGainState
       ? {
-          ...scaledExpression,
+          ...enrichedExpression,
           mouthOpenScale: clamp(
-            scaledExpression.mouthOpenScale * autoGain,
+            enrichedExpression.mouthOpenScale * autoGain,
             0.2,
             3,
           ),
         }
-      : scaledExpression;
+      : enrichedExpression;
     const finalValue = clamp(smoothed * adjustedExpression.mouthOpenScale, 0, 1);
 
     return {
@@ -313,6 +397,17 @@ export class TimelinePlayer {
       expressionRecord[key] = value;
     }
     return clampExpressionState(result);
+  }
+
+  private sampleSemanticState(
+    timeline: Map<string, ExpressionTimelineKeyframe[]>,
+    time: number,
+  ): SemanticState {
+    const record: SemanticState = {};
+    for (const [key, frames] of timeline) {
+      record[key] = clamp(sampleKeyframes(frames, time, 0), -1, 1);
+    }
+    return record;
   }
 
   private createAutoGainState(

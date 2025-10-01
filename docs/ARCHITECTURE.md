@@ -24,8 +24,12 @@
    - 返回 `{ audioUrl, mouthTimeline, provider }`。
 3. 前端根据响应执行优先级：
    - 若 `mouthTimeline` 存在，创建音频播放器与 `MouthSignal.playTimeline`；
+   - 结合 `deriveSemanticTimelines` 解析原始文本与 `wordTimeline`，生成 `emoteTimeline`、`gestureTimeline`；
    - 否则回退到 Web Speech（仅限浏览器）或音量包络分析；
-4. 动画层（BigMouthAvatar 或小程序 Canvas）根据 `mouth` 值绘制大嘴巴头，Sprite 模式则按 `visemeId` 切换贴图；
+4. 动画层（BigMouthAvatar 或小程序 Canvas）根据 `TimelinePlayer` 融合后的表情参数绘制：
+   - `mouthTimeline` 负责嘴型插值；
+   - `emoteTimeline` 改变嘴角弧度、眼睑开合；
+   - `gestureTimeline` 调整点头、身体摇摆等动作；
 5. 服务端周期性清理临时音频，`/chat` 仍保留占位实现以待后续接入 LLM。
 
 ### 时序图
@@ -34,7 +38,8 @@
 用户输入 → main.js → requestServerTts → Express /tts
     → eSpeak CLI (--pho) → 解析 .pho → 生成 mouthTimeline
     → 返回 JSON → 浏览器创建 Audio 元素/innerAudioContext → MouthSignal.playTimeline
-    → BigMouthAvatar/Canvas 绘制 → 用户看到嘴型同步
+    → deriveSemanticTimelines → TimelinePlayer 融合 emote/gesture → BigMouthAvatar/Canvas 绘制
+    → 用户看到嘴型与表情/手势同步
 ```
 
 ## 兼容性矩阵
@@ -69,6 +74,24 @@
   - 定义统一的 `MouthValue`、`EyeBlink`、`BodyPose` 数据结构；
   - 支持替换成 SVG、Lottie、Three.js 等不同渲染器；
   - 提供配置驱动的主题（颜色、表情、配件）。
+
+## 语义触发到表情融合
+
+语义触发模块 `semantic-triggers.ts` 使用原始文本、`estimateSentiment` 结果与 `wordTimeline` 推导表情包与手势时间轴：
+
+1. 对输入文本执行低开销的词典匹配，默认词典覆盖笑声、问号、感叹号等关键词；
+2. 若提供逐词时间轴，会使用词块的中点时间作为触发点，否则按字符位置推算时间；
+3. 结合情绪标签（positive/question/excited）补充基础动作，例如积极文本自动加一点笑弧度；
+4. `TimelinePlayer` 将 `emoteTimeline`、`gestureTimeline` 与常规表情关键帧融合，映射成 `AvatarExpressionParams`。
+
+| 时间轴类型 | 键值 (`k`)       | 作用说明                           | 建议取值范围 |
+| -------- | ---------------- | ---------------------------------- | ------------ |
+| emote    | `smileBoost`      | 嘴角上扬并略微放松嘴唇紧绷         | 0~1          |
+| emote    | `browLift`        | 提升眉眼开合，减少眨眼概率         | 0~1          |
+| gesture  | `headNod`         | 增加点头幅度，适合强调语气         | 0~1          |
+| gesture  | `swayBoost`*      | 额外身体摇摆（可在自定义词典中启用）| 0~1          |
+
+> 说明：带星号的键默认为空，可通过自定义词典添加。若词典直接输出 `cornerCurve`、`headNodAmp` 等现有字段，则会作为绝对值覆盖。
 
 ## 扩展路线
 

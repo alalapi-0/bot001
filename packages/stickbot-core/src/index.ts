@@ -23,3 +23,15 @@ export type { ExpressionTimelinePoint } from './timeline-player.js';
 
 export { mapEmotionToExpression } from './emotion/expression-mapping.js';
 export type { AvatarExpressionParams } from './emotion/expression-mapping.js';
+
+export {
+  deriveSemanticTimelines,
+  DEFAULT_SEMANTIC_DICTIONARY,
+} from './emotion/semantic-triggers.js';
+export type {
+  SemanticDictionary,
+  SemanticDictionaryEntry,
+  SemanticTimelineKeyframe,
+  SemanticTimelineResult,
+  WordTimelineEntry,
+} from './emotion/semantic-triggers.js';
