@@ -87,6 +87,32 @@ npm run dev
 
 可按需增加更多角色（至少保留一个 `default`），修改后无需重启前端即可生效。
 
+## 语义表情触发词典
+
+- `packages/stickbot-core/src/emotion/semantic-triggers.ts` 内置 `deriveSemanticTimelines`，会根据文本、`estimateSentiment` 结果与 `wordTimeline` 推导 `emoteTimeline`、`gestureTimeline`；
+- 默认词典已覆盖“哈哈/LOL”触发笑弧度、“？”抬眉、“！”点头等基础动作；
+- 若需扩展，可在前端或小程序项目中新建 `lexicon/semantic.json` 并写入如下结构：
+
+```json
+[
+  {
+    "key": "swayBoost",
+    "timeline": "gesture",
+    "terms": ["摇摆", "swing"],
+    "intensity": 0.8,
+    "sustain": 1.2
+  },
+  {
+    "key": "cornerCurve",
+    "timeline": "emote",
+    "terms": ["微笑"],
+    "intensity": 0.4
+  }
+]
+```
+
+> 建议将词典 JSON 放在 `web/lexicon/semantic.json` 或 `weapp-stickbot/lexicon/semantic.json`，按需在构建脚本/页面中加载后传入 `deriveSemanticTimelines(text, sentiment, wordTimeline, dictionary)`。若词典直接输出 `cornerCurve` 等现有字段，将作为绝对值覆盖，其它键如 `smileBoost`、`browLift` 会以增量方式融合。
+
 ## 架构概览
 
 ```
