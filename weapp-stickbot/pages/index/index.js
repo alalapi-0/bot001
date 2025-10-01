@@ -515,6 +515,8 @@ Page({
     serverOrigin: '',
     spriteBasePath: '/assets/mouth',
     autoGainEnabled: true,
+    semanticEnabled: false,
+    captureEnabled: false,
     currentWord: '',
     roleNames: [DEFAULT_ROLE.name],
     roleIndex: 0,
@@ -1118,6 +1120,13 @@ Page({
     } catch (error) {
       console.warn('保存自动增益状态失败', error);
     }
+  },
+  /**
+   * 语义触发开关。当前为占位逻辑，仅记录用户偏好。
+   */
+  onSemanticToggle(event) {
+    const enabled = !!event.detail.value;
+    this.setData({ semanticEnabled: enabled });
   },
   /**
    * 绘制火柴人 + 大嘴巴头。

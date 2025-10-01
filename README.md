@@ -156,6 +156,21 @@ npm run dev
 
 > 建议将词典 JSON 放在 `web/lexicon/semantic.json` 或 `weapp-stickbot/lexicon/semantic.json`，按需在构建脚本/页面中加载后传入 `deriveSemanticTimelines(text, sentiment, wordTimeline, dictionary)`。若词典直接输出 `cornerCurve` 等现有字段，将作为绝对值覆盖，其它键如 `smileBoost`、`browLift` 会以增量方式融合。
 
+## 插件开发指南
+
+- 核心包新增 `packages/stickbot-core/src/plugins/`，导出统一的 {@link StickBotPlugin} 接口：
+  - `setup(ctx)` 在插件注册时调用，`ctx` 包含 `timeline`（{@link TimelinePlayer}）、`avatar`（{@link BigMouthAvatar}）、`bus`（`EventTarget`）与可选的 `options`；
+  - `dispose()` 可选，用于移除监听、停止定时器等收尾操作；
+- 宿主可通过事件总线协调多插件流程，核心内置事件常量 `StickBotPluginEvents`：
+  - `timeline:prepare`：创建时间线前触发，插件可修改 `detail.timelineOptions` 注入 `expressionTimeline`、`emoteTimeline`、`autoGain` 等；
+  - `mouth-capture:start` / `mouth-capture:stop`：请求 mouth 捕捉插件启动或停止，并通过 `detail.onFrame(value)` 推送 0-1 mouth 值；
+  - `mouth-capture:status`：插件可回传当前模式（如 `placeholder`、`facemesh`）。
+- 内置三个插件工厂函数可直接复用：
+  - `semanticTriggersPlugin(options)`：依据文本、情绪估计与 `wordTimeline` 生成语义表情/手势时间轴；
+  - `autoGainPlugin(options)`：确保 `TimelinePlayer` 启用自动增益，支持布尔或部分配置覆盖；
+  - `mouthCapturePlugin(options)`：提供无需外部库的占位 mouth 捕捉，实现伪随机波动输出。
+- 宿主（网页、小程序或自定义容器）在切换插件时应调用 `dispose()`，并保证即便全部插件关闭仍能维持基础 mouth 播放流程。
+
 ## 架构概览
 
 ```

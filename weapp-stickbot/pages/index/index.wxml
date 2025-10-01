@@ -28,9 +28,21 @@
         <view class="picker-value">{{themeNames.length ? themeNames[themeIndex] : ''}}</view>
       </picker>
     </view>
-    <view class="switch-row">
-      <text class="label">自动增益</text>
-      <switch checked="{{autoGainEnabled}}" bindchange="onAutoGainToggle"></switch>
+    <view class="plugin-card">
+      <text class="plugin-title">插件启用开关</text>
+      <view class="switch-row">
+        <text class="label">自动增益</text>
+        <switch checked="{{autoGainEnabled}}" bindchange="onAutoGainToggle"></switch>
+      </view>
+      <view class="switch-row">
+        <text class="label">语义触发</text>
+        <switch checked="{{semanticEnabled}}" bindchange="onSemanticToggle"></switch>
+      </view>
+      <view class="switch-row">
+        <text class="label">摄像头捕捉</text>
+        <switch checked="{{captureEnabled}}" disabled="true"></switch>
+      </view>
+      <text class="plugin-hint">小程序暂未接入摄像头捕捉插件，可在网页端体验。</text>
     </view>
     <view class="info">当前 mouth：{{mouthDisplay}}，viseme：{{visemeId}}</view>
     <view class="button-group">

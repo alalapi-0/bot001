@@ -43,3 +43,17 @@ export type {
   SemanticTimelineResult,
   WordTimelineEntry,
 } from './emotion/semantic-triggers.js';
+
+export {
+  semanticTriggersPlugin,
+  autoGainPlugin,
+  mouthCapturePlugin,
+  StickBotPluginEvents,
+} from './plugins/index.js';
+export type {
+  StickBotPlugin,
+  StickBotPluginContext,
+  StickBotTimelinePrepareDetail,
+  StickBotMouthCaptureStartDetail,
+  StickBotMouthCaptureStopDetail,
+} from './plugins/index.js';

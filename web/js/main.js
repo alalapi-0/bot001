@@ -38,6 +38,7 @@ const roleMeta = document.getElementById('role-meta');
 const defaultRoleDescription = roleDescription?.textContent || '';
 const visemeDisplay = document.getElementById('viseme-display');
 const autoGainToggle = /** @type {HTMLInputElement} */ (document.getElementById('auto-gain-toggle'));
+const semanticToggle = /** @type {HTMLInputElement} */ (document.getElementById('semantic-toggle'));
 const webcamToggle = /** @type {HTMLInputElement} */ (document.getElementById('webcam-mouth-toggle'));
 const webcamStatus = document.getElementById('webcam-status');
 const wordTimelineBar = /** @type {HTMLDivElement} */ (document.getElementById('word-timeline-bar'));
@@ -46,6 +47,13 @@ const wordVttInput = /** @type {HTMLTextAreaElement} */ (document.getElementById
 const applyVttButton = /** @type {HTMLButtonElement} */ (document.getElementById('apply-vtt-btn'));
 const clearVttButton = /** @type {HTMLButtonElement} */ (document.getElementById('clear-vtt-btn'));
 const useManualVttCheckbox = /** @type {HTMLInputElement} */ (document.getElementById('use-manual-vtt'));
+
+/**
+ * @typedef {Object} StickBotPlugin
+ * @property {string} name - 插件名称。
+ * @property {(ctx: { timeline: any, avatar: BigMouthAvatar, bus: EventTarget, options?: any }) => void} setup - 初始化方法。
+ * @property {() => void} [dispose] - 可选的清理方法。
+ */
 
 const THEME_STORAGE_KEY = 'stickbot:manual-theme';
 
@@ -392,6 +400,96 @@ overlayInfo('stickbot 已就绪，优先使用服务端时间轴驱动。');
 // 口型信号
 const mouthSignal = new MouthSignal();
 const mouthCapture = new MouthCapture();
+const pluginBus = new EventTarget();
+
+/** @type {Map<string, StickBotPlugin>} */
+const activePlugins = new Map();
+
+const pluginContext = {
+  timeline: /** @type {any} */ ({}),
+  avatar,
+  bus: pluginBus,
+  options: {},
+};
+
+/** @type {Record<string, () => StickBotPlugin>} */
+const pluginFactories = {
+  'auto-gain': createAutoGainPlugin,
+  'semantic-triggers': createSemanticPlugin,
+  'mouth-capture': createMouthCapturePlugin,
+};
+
+const syncPluginToggle = (name, enabled) => {
+  switch (name) {
+    case 'auto-gain':
+      if (autoGainToggle) {
+        autoGainToggle.checked = enabled;
+      }
+      break;
+    case 'semantic-triggers':
+      if (semanticToggle) {
+        semanticToggle.checked = enabled;
+      }
+      break;
+    case 'mouth-capture':
+      if (webcamToggle) {
+        webcamToggle.checked = enabled;
+      }
+      break;
+    default:
+      break;
+  }
+};
+
+const enablePlugin = (name) => {
+  if (activePlugins.has(name)) {
+    return activePlugins.get(name) || null;
+  }
+  const factory = pluginFactories[name];
+  if (typeof factory !== 'function') {
+    return null;
+  }
+  const plugin = factory();
+  if (!plugin || typeof plugin.setup !== 'function') {
+    return null;
+  }
+  activePlugins.set(name, plugin);
+  try {
+    plugin.setup(pluginContext);
+    syncPluginToggle(name, true);
+    return plugin;
+  } catch (error) {
+    console.warn('[stickbot] 启用插件失败', name, error);
+    activePlugins.delete(name);
+    syncPluginToggle(name, false);
+    return null;
+  }
+};
+
+const disablePlugin = (name) => {
+  const plugin = activePlugins.get(name);
+  if (!plugin) {
+    syncPluginToggle(name, false);
+    return;
+  }
+  try {
+    plugin.dispose?.();
+  } catch (error) {
+    console.warn('[stickbot] 卸载插件失败', name, error);
+  }
+  activePlugins.delete(name);
+  syncPluginToggle(name, false);
+};
+
+const togglePlugin = (name, enabled) => {
+  if (enabled) {
+    enablePlugin(name);
+  } else {
+    disablePlugin(name);
+  }
+};
+
+const isPluginActive = (name) => activePlugins.has(name);
 mouthSignal.subscribe((frame) => {
   avatar.setMouthFrame(frame);
   mouthProgress.value = frame.value;
@@ -416,6 +514,8 @@ let lastActiveWordIndex = -1;
 let wordStatusResetTimer = null;
 /** @type {boolean} */
 let audioDriving = false;
+/** @type {boolean} */
+let mouthCaptureActive = false;
 /** @type {TimelinePlayer|null} */
 let activeTimelinePlayer = null;
 
@@ -717,6 +817,17 @@ const loadAutoGainPreference = () => {
 
 let autoGainPreference = loadAutoGainPreference();
 
+const persistAutoGainPreference = (state) => {
+  try {
+    window.localStorage?.setItem(
+      AUTO_GAIN_STORAGE_KEY,
+      JSON.stringify({ enabled: state.enabled, config: state.config }),
+    );
+  } catch (error) {
+    console.warn('[stickbot] 保存自动增益设置失败', error);
+  }
+};
+
 const updateWebcamStatus = (message) => {
   if (webcamStatus) {
     webcamStatus.textContent = message;
@@ -737,7 +848,7 @@ const describeWebcamMode = (mode) => {
 updateWebcamStatus(describeWebcamMode('idle'));
 
 mouthCapture.onMouth((value) => {
-  if (!webcamToggle?.checked) {
+  if (!mouthCaptureActive) {
     return;
   }
   if (audioDriving) {
@@ -748,41 +859,211 @@ mouthCapture.onMouth((value) => {
   mouthSignal.setFrame({ value: safe, visemeId, phoneme: 'webcam' });
 });
 
-const applyAutoGainPreference = (enabled, config) => {
-  autoGainPreference = { enabled, config };
-  mouthSignal.setAutoGain(enabled, config);
+const applyAutoGainPreference = (enabled, config = autoGainPreference.config) => {
+  const mergedConfig = { ...DEFAULT_AUTO_GAIN_CONFIG, ...(config || {}) };
+  autoGainPreference = { enabled, config: mergedConfig };
+  persistAutoGainPreference(autoGainPreference);
 };
 
 if (autoGainToggle) {
-  applyAutoGainPreference(autoGainPreference.enabled, autoGainPreference.config);
+  autoGainToggle.checked = autoGainPreference.enabled;
   autoGainToggle.addEventListener('change', () => {
-    applyAutoGainPreference(autoGainToggle.checked, autoGainPreference.config);
+    togglePlugin('auto-gain', autoGainToggle.checked);
   });
-} else {
-  mouthSignal.setAutoGain(true, autoGainPreference.config);
+}
+
+if (semanticToggle) {
+  semanticToggle.checked = false;
+  semanticToggle.addEventListener('change', () => {
+    togglePlugin('semantic-triggers', semanticToggle.checked);
+  });
 }
 
 if (webcamToggle) {
   webcamToggle.checked = false;
-  webcamToggle.addEventListener('change', async () => {
-    if (webcamToggle.checked) {
-      updateWebcamStatus('正在请求摄像头权限...');
-      webcamToggle.disabled = true;
-      const ok = await mouthCapture.enableWebcam();
-      webcamToggle.disabled = false;
-      if (!ok) {
-        updateWebcamStatus('启用失败，请检查摄像头权限或设备占用情况。');
-        webcamToggle.checked = false;
-        return;
-      }
-      updateWebcamStatus(describeWebcamMode(mouthCapture.mode));
-      overlayInfo('摄像头口型捕捉已开启，可在未播放音频时驱动火柴人。');
-    } else {
-      mouthCapture.disableWebcam();
-      updateWebcamStatus(describeWebcamMode('idle'));
-      overlayInfo('已关闭摄像头口型捕捉。');
-    }
+  webcamToggle.addEventListener('change', () => {
+    togglePlugin('mouth-capture', webcamToggle.checked);
   });
+}
+
+togglePlugin('auto-gain', autoGainPreference.enabled);
+
+const prepareTimelineWithPlugins = (text) => {
+  const detail = {
+    text,
+    sentiment: null,
+    wordTimeline: Array.isArray(activeWordTimeline) ? [...activeWordTimeline] : [],
+    timelineOptions: {
+      autoGain: autoGainPreference.enabled ? { ...autoGainPreference.config } : false,
+      expressionPreset: null,
+      emoteTimeline: [],
+      gestureTimeline: [],
+      expressionTimeline: [],
+    },
+  };
+  pluginBus.dispatchEvent(new CustomEvent('stickbot:timeline:prepare', { detail }));
+  const timelineOptions = detail.timelineOptions || {};
+  const autoGainOption = timelineOptions.autoGain;
+  if (autoGainOption && typeof autoGainOption === 'object') {
+    mouthSignal.setAutoGain(true, { ...autoGainPreference.config, ...autoGainOption });
+  } else if (autoGainOption === true) {
+    mouthSignal.setAutoGain(true, autoGainPreference.config);
+  } else {
+    mouthSignal.setAutoGain(false, autoGainPreference.config);
+  }
+  if (timelineOptions.expressionPreset) {
+    const merged = {
+      ...(activeRole?.preset || {}),
+      ...timelineOptions.expressionPreset,
+    };
+    applyExpressionPreset(merged);
+  } else if (activeRole) {
+    applyExpressionPreset(activeRole.preset);
+  }
+};
+
+function createAutoGainPlugin() {
+  let onPrepare = null;
+  return {
+    name: 'auto-gain',
+    setup() {
+      applyAutoGainPreference(true);
+      mouthSignal.setAutoGain(true, autoGainPreference.config);
+      onPrepare = (event) => {
+        if (!(event instanceof CustomEvent)) {
+          return;
+        }
+        const detail = event.detail;
+        if (!detail || !detail.timelineOptions) {
+          return;
+        }
+        detail.timelineOptions.autoGain = { ...autoGainPreference.config };
+      };
+      pluginBus.addEventListener('stickbot:timeline:prepare', onPrepare);
+    },
+    dispose() {
+      if (onPrepare) {
+        pluginBus.removeEventListener('stickbot:timeline:prepare', onPrepare);
+      }
+      onPrepare = null;
+      mouthSignal.setAutoGain(false, autoGainPreference.config);
+      applyAutoGainPreference(false);
+    },
+  };
+}
+
+function createSemanticPlugin() {
+  let onPrepare = null;
+  return {
+    name: 'semantic-triggers',
+    setup() {
+      onPrepare = (event) => {
+        if (!(event instanceof CustomEvent)) {
+          return;
+        }
+        const detail = event.detail;
+        if (!detail || !detail.timelineOptions) {
+          return;
+        }
+        const text = detail.text || '';
+        if (!text.trim()) {
+          return;
+        }
+        const exclaimCount = (text.match(/[!！]/gu) || []).length;
+        const questionCount = (text.match(/[?？]/gu) || []).length;
+        if (exclaimCount === 0 && questionCount === 0) {
+          return;
+        }
+        const preset = { ...(detail.timelineOptions.expressionPreset || {}) };
+        if (exclaimCount > 0) {
+          preset.mouthOpenScale = Math.min(1.6, 1 + exclaimCount * 0.08);
+          preset.headNodAmp = Math.min(0.9, (preset.headNodAmp || 0) + exclaimCount * 0.12);
+          preset.cornerCurve = Math.min(0.8, (preset.cornerCurve || 0) + exclaimCount * 0.1);
+        }
+        if (questionCount > 0) {
+          preset.eyeBlinkBias = Math.max(-0.6, (preset.eyeBlinkBias || 0) - questionCount * 0.18);
+        }
+        detail.timelineOptions.expressionPreset = preset;
+      };
+      pluginBus.addEventListener('stickbot:timeline:prepare', onPrepare);
+    },
+    dispose() {
+      if (onPrepare) {
+        pluginBus.removeEventListener('stickbot:timeline:prepare', onPrepare);
+      }
+      onPrepare = null;
+    },
+  };
+}
+
+function createMouthCapturePlugin() {
+  let disposed = false;
+  let started = false;
+  return {
+    name: 'mouth-capture',
+    setup() {
+      disposed = false;
+      started = false;
+      mouthCaptureActive = false;
+      updateWebcamStatus('正在请求摄像头权限...');
+      if (webcamToggle) {
+        webcamToggle.disabled = true;
+      }
+      Promise.resolve()
+        .then(() => mouthCapture.enableWebcam())
+        .then((ok) => {
+          if (disposed) {
+            return;
+          }
+          if (!ok) {
+            updateWebcamStatus('启用失败，请检查摄像头权限或设备占用情况。');
+            if (webcamToggle) {
+              webcamToggle.disabled = false;
+            }
+            setTimeout(() => disablePlugin('mouth-capture'), 0);
+            return;
+          }
+          mouthCaptureActive = true;
+          started = true;
+          updateWebcamStatus(describeWebcamMode(mouthCapture.mode));
+          if (webcamToggle) {
+            webcamToggle.disabled = false;
+          }
+          overlayInfo('摄像头口型捕捉已开启，可在未播放音频时驱动火柴人。');
+          pluginBus.dispatchEvent(new CustomEvent('stickbot:mouth-capture:status', {
+            detail: { active: true, mode: mouthCapture.mode },
+          }));
+        })
+        .catch((error) => {
+          if (disposed) {
+            return;
+          }
+          console.warn('[stickbot] 摄像头捕捉启用失败', error);
+          updateWebcamStatus('启用失败，请检查摄像头权限或设备占用情况。');
+          if (webcamToggle) {
+            webcamToggle.disabled = false;
+          }
+          setTimeout(() => disablePlugin('mouth-capture'), 0);
+        });
+    },
+    dispose() {
+      disposed = true;
+      mouthCaptureActive = false;
+      mouthCapture.disableWebcam();
+      if (webcamToggle) {
+        webcamToggle.disabled = false;
+      }
+      if (started) {
+        updateWebcamStatus(describeWebcamMode('idle'));
+      }
+      pluginBus.dispatchEvent(new CustomEvent('stickbot:mouth-capture:status', {
+        detail: { active: false, mode: 'idle' },
+      }));
+      if (started && !audioDriving) {
+        overlayInfo('已关闭摄像头口型捕捉。');
+      }
+    },
+  };
 }
 
 if (roleSelect) {
@@ -1833,6 +2114,7 @@ playButton.addEventListener('click', async () => {
   }
 
   stopCurrentPlayback();
+  prepareTimelineWithPlugins(text);
   playButton.disabled = true;
   overlayInfo('开始请求 TTS...');
 
@@ -1989,9 +2271,8 @@ stopButton.addEventListener('click', () => {
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     stopCurrentPlayback();
-    if (webcamToggle?.checked) {
-      mouthCapture.disableWebcam();
-      webcamToggle.checked = false;
+    if (isPluginActive('mouth-capture')) {
+      disablePlugin('mouth-capture');
       updateWebcamStatus('页面隐藏，已自动关闭摄像头。');
     }
   }

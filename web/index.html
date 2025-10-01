@@ -132,6 +132,36 @@
         color: var(--hint-text);
       }
 
+      .plugin-group {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 12px;
+        border: 1px solid var(--timeline-border);
+        border-radius: 10px;
+        background: var(--timeline-bg);
+      }
+
+      .plugin-group h2 {
+        margin: 0;
+        font-size: 15px;
+        color: var(--card-text);
+      }
+
+      .plugin-group label {
+        font-size: 13px;
+      }
+
+      .plugin-hint {
+        font-size: 12px;
+        color: var(--hint-text);
+      }
+
+      .plugin-status {
+        font-size: 12px;
+        color: var(--hint-text);
+      }
+
       .role-description {
         margin: 0;
         font-size: 13px;
@@ -366,17 +396,25 @@
           <input type="checkbox" id="use-webspeech" checked />
           无时间轴时尝试使用浏览器 Web Speech API
         </label>
-        <label>
-          <input type="checkbox" id="auto-gain-toggle" checked />
-          自动增益口型幅度
-        </label>
-        <label>
-          <input type="checkbox" id="webcam-mouth-toggle" />
-          启用摄像头口型捕捉（实验性）
-        </label>
-        <small id="webcam-status" style="font-size: 12px; color: #6b7280"
-          >默认关闭，启用后浏览器会请求摄像头权限。加载 faceMesh 库后可获得更稳定的估计。</small
-        >
+        <div class="plugin-group">
+          <h2>插件启用开关</h2>
+          <span class="plugin-hint">按需启用自动增益、语义触发与摄像头捕捉，全部关闭时仍可播放基础时间轴。</span>
+          <label>
+            <input type="checkbox" id="auto-gain-toggle" checked />
+            自动增益口型幅度
+          </label>
+          <label>
+            <input type="checkbox" id="semantic-toggle" />
+            文本语义触发表情（实验性）
+          </label>
+          <label>
+            <input type="checkbox" id="webcam-mouth-toggle" />
+            启用摄像头口型捕捉（实验性）
+          </label>
+          <small id="webcam-status" class="plugin-status"
+            >默认关闭，启用后浏览器会请求摄像头权限。加载 faceMesh 库后可获得更稳定的估计。</small
+          >
+        </div>
         <div class="slider-group">
           <span>语速：<span id="rate-display">1.0</span></span>
           <input type="range" id="rate-slider" min="0.5" max="2" step="0.1" value="1" />
