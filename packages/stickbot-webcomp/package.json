@@ -1,0 +1,21 @@
+{
+  "name": "@stickbot/webcomp",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/stickbot-webcomp.esm.js",
+  "module": "./dist/stickbot-webcomp.esm.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/stickbot-webcomp.esm.js",
+      "default": "./dist/stickbot-webcomp.esm.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "peerDependencies": {
+    "@stickbot/core": "^0.1.0"
+  }
+}
