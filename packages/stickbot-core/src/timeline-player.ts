@@ -44,6 +44,24 @@ export interface TimelinePlayerOptions {
   expressionTimeline?: ExpressionTimelineKeyframe[];
   /** 表情整体强度缩放，默认 1。 */
   expressionScale?: number;
+  /** 自动增益配置。传入 true 启用默认参数，或指定配置覆盖。 */
+  autoGain?: boolean | Partial<TimelinePlayerAutoGainOptions>;
+}
+
+/** 自动增益参数。 */
+export interface TimelinePlayerAutoGainOptions {
+  /** 是否启用。 */
+  enabled: boolean;
+  /** 计算窗口（秒）。 */
+  windowSec: number;
+  /** 目标 RMS。 */
+  targetRMS: number;
+  /** 增益下限。 */
+  floor: number;
+  /** 增益上限。 */
+  ceil: number;
+  /** 可选的平滑系数，0-1，数值越大增益变化越平滑。 */
+  smoothing?: number;
 }
 
 /**
@@ -97,6 +115,8 @@ const scaleExpression = (
   });
 
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
+
+const clamp01 = (value: number): number => clamp(value, 0, 1);
 
 const groupExpressionKeyframes = (
   keyframes: ExpressionTimelineKeyframe[],
@@ -202,6 +222,8 @@ export class TimelinePlayer {
 
   private readonly expressionScale: number;
 
+  private readonly autoGainState: AutoGainState | null;
+
   private smoothedValue: number | null = null;
 
   private lastSampleTime: number | null = null;
@@ -214,6 +236,7 @@ export class TimelinePlayer {
     this.expressionTimeline = groupExpressionKeyframes(options.expressionTimeline ?? []);
     this.smoothing = clamp(options.smoothing ?? 0.22, 0, 0.95);
     this.expressionScale = clamp(options.expressionScale ?? 1, 0, 3);
+    this.autoGainState = this.createAutoGainState(options.autoGain);
   }
 
   /**
@@ -222,6 +245,10 @@ export class TimelinePlayer {
   reset(): void {
     this.smoothedValue = null;
     this.lastSampleTime = null;
+    if (this.autoGainState) {
+      this.autoGainState.lastGain = 1;
+      this.autoGainState.lastTime = null;
+    }
   }
 
   /**
@@ -235,13 +262,24 @@ export class TimelinePlayer {
     const smoothed = this.applySmoothing(rawValue, time);
     const expression = this.sampleExpression(time);
     const scaledExpression = scaleExpression(expression, this.expressionScale);
-    const finalValue = clamp(smoothed * scaledExpression.mouthOpenScale, 0, 1);
+    const autoGain = this.autoGainState ? this.computeAutoGain(time) : 1;
+    const adjustedExpression = this.autoGainState
+      ? {
+          ...scaledExpression,
+          mouthOpenScale: clamp(
+            scaledExpression.mouthOpenScale * autoGain,
+            0.2,
+            3,
+          ),
+        }
+      : scaledExpression;
+    const finalValue = clamp(smoothed * adjustedExpression.mouthOpenScale, 0, 1);
 
     return {
       value: finalValue,
       visemeId,
       phoneme,
-      expression: scaledExpression,
+      expression: adjustedExpression,
     };
   }
 
@@ -276,6 +314,108 @@ export class TimelinePlayer {
     }
     return clampExpressionState(result);
   }
+
+  private createAutoGainState(
+    option: TimelinePlayerOptions['autoGain'],
+  ): AutoGainState | null {
+    if (!option) {
+      return null;
+    }
+    const defaultConfig: TimelinePlayerAutoGainOptions = {
+      enabled: true,
+      windowSec: 5,
+      targetRMS: 0.5,
+      floor: 0.6,
+      ceil: 1.5,
+      smoothing: 0.3,
+    };
+    const config: TimelinePlayerAutoGainOptions = {
+      ...defaultConfig,
+      ...(typeof option === 'boolean'
+        ? { enabled: option }
+        : option ?? {}),
+    };
+    if (!config.enabled || this.mouthTimeline.length === 0) {
+      return null;
+    }
+    const step = 1 / 60;
+    const duration = this.mouthTimeline[this.mouthTimeline.length - 1]?.t ?? 0;
+    const sampleCount = Math.max(
+      2,
+      Math.ceil((duration + config.windowSec) / step) + 1,
+    );
+    const samples = new Array<number>(sampleCount);
+    for (let i = 0; i < sampleCount; i += 1) {
+      const t = i * step;
+      const { value } = sampleMouthFrame(this.mouthTimeline, t);
+      samples[i] = clamp01(value);
+    }
+    const prefixSquares = new Array<number>(sampleCount + 1).fill(0);
+    for (let i = 0; i < sampleCount; i += 1) {
+      const value = samples[i];
+      prefixSquares[i + 1] = prefixSquares[i] + value * value;
+    }
+    return {
+      config,
+      step,
+      samples,
+      prefixSquares,
+      lastGain: 1,
+      lastTime: null,
+    };
+  }
+
+  private computeAutoGain(time: number): number {
+    const state = this.autoGainState;
+    if (!state) {
+      return 1;
+    }
+    if (!Number.isFinite(time) || time <= 0) {
+      state.lastTime = time;
+      state.lastGain = 1;
+      return 1;
+    }
+    if (state.lastTime !== null && time < state.lastTime) {
+      state.lastGain = 1;
+    }
+    state.lastTime = time;
+    const { config, step, samples, prefixSquares } = state;
+    const currentIndex = clamp(
+      Math.floor(time / step),
+      0,
+      samples.length - 1,
+    );
+    const windowSamples = Math.max(1, Math.round(config.windowSec / step));
+    const startIndex = Math.max(0, currentIndex - windowSamples + 1);
+    const sumSquares =
+      prefixSquares[currentIndex + 1] - prefixSquares[startIndex];
+    const sampleCount = currentIndex + 1 - startIndex;
+    if (sampleCount <= 0) {
+      state.lastGain = 1;
+      return 1;
+    }
+    const rms = Math.sqrt(sumSquares / sampleCount);
+    if (!Number.isFinite(rms) || rms < 1e-4) {
+      state.lastGain = 1;
+      return 1;
+    }
+    const rawGain = clamp(config.targetRMS / rms, config.floor, config.ceil);
+    const smoothing = clamp(config.smoothing ?? 0, 0, 0.95);
+    const nextGain = smoothing > 0
+      ? state.lastGain + (rawGain - state.lastGain) * smoothing
+      : rawGain;
+    state.lastGain = clamp(nextGain, config.floor, config.ceil);
+    return state.lastGain;
+  }
 }
 
 export type { ExpressionTimelineKeyframe as ExpressionTimelinePoint };
+
+interface AutoGainState {
+  config: TimelinePlayerAutoGainOptions;
+  step: number;
+  samples: number[];
+  prefixSquares: number[];
+  lastGain: number;
+  lastTime: number | null;
+}

@@ -1,5 +1,6 @@
 import { PARAM_DEFINITIONS, TunerModel, createDownloadBlob } from './tuner.model.js';
 import { BigMouthAvatar } from './avatar.js';
+import { AutoGainProcessor, DEFAULT_AUTO_GAIN_CONFIG } from './auto-gain.js';
 
 const statusEl = /** @type {HTMLDivElement} */ (document.getElementById('status'));
 const paramListEl = document.getElementById('param-list');
@@ -10,11 +11,14 @@ const copyBtn = /** @type {HTMLButtonElement} */ (document.getElementById('copy-
 const downloadBtn = /** @type {HTMLButtonElement} */ (document.getElementById('download-btn'));
 const avatarCanvas = /** @type {HTMLCanvasElement | null} */ (document.getElementById('avatar-preview'));
 const curveCanvas = /** @type {HTMLCanvasElement | null} */ (document.getElementById('curve-canvas'));
+const autoGainCheckbox = /** @type {HTMLInputElement | null} */ (document.getElementById('auto-gain-toggle'));
 
 const model = new TunerModel();
 
 /** @type {Map<string, { slider: HTMLInputElement; number: HTMLInputElement }>} */
 const inputRefs = new Map();
+
+const AUTO_GAIN_STORAGE_KEY = 'stickbot:auto-gain';
 
 const clamp01 = (value) => Math.min(1, Math.max(0, value));
 
@@ -89,7 +93,7 @@ const generateTimeline = (params) => {
 };
 
 class LocalTimelinePreview {
-  constructor(avatar, canvas) {
+  constructor(avatar, canvas, autoGainEnabled = true) {
     this.avatar = avatar;
     this.canvas = canvas;
     this.timeline = generateTimeline(model.getState());
@@ -97,12 +101,21 @@ class LocalTimelinePreview {
     this.rafId = null;
     this.drawCurves();
     this.loop = this.loop.bind(this);
+    this.autoGainEnabled = Boolean(autoGainEnabled);
+    this.autoGain = this.autoGainEnabled
+      ? new AutoGainProcessor(this.timeline.smooth, DEFAULT_AUTO_GAIN_CONFIG)
+      : null;
     this.start();
   }
 
   setParams(params) {
     this.timeline = generateTimeline(params);
     this.drawCurves();
+    if (this.autoGain) {
+      this.autoGain.setTimeline(this.timeline.smooth);
+    } else if (this.autoGainEnabled) {
+      this.autoGain = new AutoGainProcessor(this.timeline.smooth, DEFAULT_AUTO_GAIN_CONFIG);
+    }
   }
 
   start() {
@@ -130,7 +143,11 @@ class LocalTimelinePreview {
     const index = Math.min(this.timeline.smooth.length - 1, Math.floor(time * tickHz));
     const frame = this.timeline.smooth[index];
     if (frame) {
-      this.avatar.setMouthFrame({ value: frame.v, visemeId: frame.viseme ?? 0, phoneme: 'preview' });
+      let value = frame.v;
+      if (this.autoGain) {
+        value = this.autoGain.apply(time, value).value;
+      }
+      this.avatar.setMouthFrame({ value, visemeId: frame.viseme ?? 0, phoneme: 'preview' });
     }
     this.rafId = requestAnimationFrame(this.loop);
   }
@@ -176,6 +193,19 @@ class LocalTimelinePreview {
 
     drawCurve(this.timeline.raw, '#6366f1');
     drawCurve(this.timeline.smooth, '#f97316');
+  }
+
+  setAutoGain(enabled) {
+    this.autoGainEnabled = Boolean(enabled);
+    if (this.autoGainEnabled) {
+      if (!this.autoGain) {
+        this.autoGain = new AutoGainProcessor(this.timeline.smooth, DEFAULT_AUTO_GAIN_CONFIG);
+      } else {
+        this.autoGain.reset();
+      }
+    } else {
+      this.autoGain = null;
+    }
   }
 }
 
@@ -244,11 +274,15 @@ const applyPreset = (preset) => {
   if (!previewLoop) {
     const avatar = ensureAvatar();
     if (avatar) {
-      previewLoop = new LocalTimelinePreview(avatar, curveCanvas);
+      const autoGainEnabled = autoGainCheckbox ? autoGainCheckbox.checked : true;
+      previewLoop = new LocalTimelinePreview(avatar, curveCanvas, autoGainEnabled);
     }
   }
   if (previewLoop) {
     previewLoop.setParams(preset);
+    if (autoGainCheckbox) {
+      previewLoop.setAutoGain(autoGainCheckbox.checked);
+    }
   }
 };
 
@@ -315,7 +349,47 @@ model.subscribe((state) => {
   applyPreset(state);
 });
 
+const applyAutoGainPreference = (enabled) => {
+  if (previewLoop) {
+    previewLoop.setAutoGain(enabled);
+  }
+  try {
+    window.localStorage?.setItem(
+      AUTO_GAIN_STORAGE_KEY,
+      JSON.stringify({ enabled, config: DEFAULT_AUTO_GAIN_CONFIG }),
+    );
+  } catch (error) {
+    console.warn('[tuner] 保存自动增益偏好失败', error);
+  }
+};
+
+const initAutoGain = () => {
+  let enabled = true;
+  try {
+    const raw = window.localStorage?.getItem(AUTO_GAIN_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed?.enabled === 'boolean') {
+        enabled = parsed.enabled;
+      }
+    }
+  } catch (error) {
+    console.warn('[tuner] 读取自动增益偏好失败', error);
+  }
+  if (autoGainCheckbox) {
+    autoGainCheckbox.checked = enabled;
+    autoGainCheckbox.addEventListener('change', () => {
+      applyAutoGainPreference(autoGainCheckbox.checked);
+    });
+  }
+  return enabled;
+};
+
 initParamInputs();
+const initialAutoGain = initAutoGain();
 applyPreset(model.getState());
 setStatus('参数已就绪，调整后自动保存到浏览器。');
+if (previewLoop) {
+  previewLoop.setAutoGain(initialAutoGain);
+}
 

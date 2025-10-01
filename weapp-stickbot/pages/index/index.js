@@ -3,10 +3,13 @@
  * @description 微信小程序首页，调用服务端 TTS 并根据 mouth 时间轴驱动“大嘴巴头”。
  */
 
+const { AutoGainProcessor, DEFAULT_AUTO_GAIN_CONFIG } = require('../../utils/auto-gain');
+
 const DEFAULT_SERVER_ORIGIN = 'http://localhost:8787';
 const RENDER_MODES = ['Vector', 'Sprite'];
 const PROVIDER_LABELS = ['espeak', 'azure'];
 const TIMER_INTERVAL = 66; // 约 15 FPS，对应 60~80Hz 插值节奏
+const AUTO_GAIN_STORAGE_KEY = 'stickbot:auto-gain';
 
 /**
  * 线性插值 mouth 时间轴。
@@ -48,6 +51,7 @@ Page({
     visemeId: 0,
     serverOrigin: '',
     spriteBasePath: '/assets/mouth',
+    autoGainEnabled: true,
   },
   /**
    * 生命周期函数：初始化画布、音频与服务端信息。
@@ -61,6 +65,7 @@ Page({
     this.timeline = [];
     this.timelineTimer = null;
     this.timelineStart = 0;
+    this.autoGainProcessor = null;
 
     this.innerAudio = wx.createInnerAudioContext();
     this.innerAudio.obeyMuteSwitch = false;
@@ -82,6 +87,11 @@ Page({
 
     this.drawAvatar();
     this.fetchProviders();
+
+    const stored = wx.getStorageSync(AUTO_GAIN_STORAGE_KEY);
+    if (stored && typeof stored === 'object' && typeof stored.enabled === 'boolean') {
+      this.setData({ autoGainEnabled: stored.enabled });
+    }
   },
   /**
    * 页面卸载时清理资源。
@@ -132,6 +142,7 @@ Page({
           return;
         }
         this.timeline = result.mouthTimeline || [];
+        this.prepareAutoGain();
         this.innerAudio.src = this.resolveServerUrl(result.audioUrl);
         this.innerAudio.play();
       })
@@ -165,6 +176,9 @@ Page({
   resetMouth() {
     this.setData({ mouth: 0.1, mouthDisplay: '0.10', visemeId: 0 });
     this.drawAvatar();
+    if (this.autoGainProcessor) {
+      this.autoGainProcessor.reset();
+    }
   },
   /**
    * 调用服务端 `/tts`。
@@ -224,7 +238,11 @@ Page({
     this.timelineTimer = setInterval(() => {
       const elapsed = (Date.now() - this.timelineStart) / 1000;
       const frame = interpolateTimeline(this.timeline, elapsed);
-      this.updateMouthFrame(frame.value, frame.visemeId);
+      let value = frame.value;
+      if (this.autoGainProcessor) {
+        value = this.autoGainProcessor.apply(elapsed, value).value;
+      }
+      this.updateMouthFrame(value, frame.visemeId);
       const lastTime = this.timeline[this.timeline.length - 1]?.t || 0;
       if (elapsed >= lastTime) {
         this.stopTimelineLoop();
@@ -241,6 +259,16 @@ Page({
     }
   },
   /**
+   * 根据当前时间轴初始化自动增益处理器。
+   */
+  prepareAutoGain() {
+    if (!this.data.autoGainEnabled || !this.timeline || this.timeline.length === 0) {
+      this.autoGainProcessor = null;
+      return;
+    }
+    this.autoGainProcessor = new AutoGainProcessor(this.timeline, DEFAULT_AUTO_GAIN_CONFIG);
+  },
+  /**
    * 更新 mouth 并重绘。
    * @param {number} value - mouth 值。
    * @param {number} visemeId - 口型编号。
@@ -253,6 +281,24 @@ Page({
       visemeId,
     });
     this.drawAvatar();
+  },
+  /**
+   * 自动增益开关。
+   * @param {WechatMiniprogram.SwitchChange} event - 事件对象。
+   */
+  onAutoGainToggle(event) {
+    const enabled = !!event.detail.value;
+    this.setData({ autoGainEnabled: enabled });
+    if (enabled) {
+      this.prepareAutoGain();
+    } else {
+      this.autoGainProcessor = null;
+    }
+    try {
+      wx.setStorageSync(AUTO_GAIN_STORAGE_KEY, { enabled, config: DEFAULT_AUTO_GAIN_CONFIG });
+    } catch (error) {
+      console.warn('保存自动增益状态失败', error);
+    }
   },
   /**
    * 绘制火柴人 + 大嘴巴头。

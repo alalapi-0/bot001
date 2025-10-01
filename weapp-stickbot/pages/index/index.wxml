@@ -14,6 +14,10 @@
         <view class="picker-value">{{renderModes[renderModeIndex]}}</view>
       </picker>
     </view>
+    <view class="switch-row">
+      <text class="label">自动增益</text>
+      <switch checked="{{autoGainEnabled}}" bindchange="onAutoGainToggle"></switch>
+    </view>
     <view class="info">当前 mouth：{{mouthDisplay}}，viseme：{{visemeId}}</view>
     <view class="button-group">
       <button type="primary" bindtap="onSynthesize">开始合成</button>
